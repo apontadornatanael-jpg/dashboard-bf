@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import math
 import sqlite3
@@ -12,116 +13,39 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from streamlit_geolocation import streamlit_geolocation
 
-# IMPORTAÇÃO DOS MÓDULOS MODULARES
-from auth import botao_logout, tela_login
+# IMPORTAÇÃO DOS MÓDULOS CUSTOMIZADOS
 from ui_components import aplicar_estilo_customizado, render_kpi_card
 
-
-def latlon_to_utm(lat, lon):
-    """Converte Latitude e Longitude em Coordenadas UTM (Easting, Northing)."""
-    if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
-        return 0.0, 0.0, 0
-
-    a = 6378137.0  # WGS84
-    f = 1 / 298.257223563
-    b = a * (1 - f)
-    e_sq = (a**2 - b**2) / (a**2)
-    k0 = 0.9996
-
-    zone_number = int((lon + 180) / 6) + 1
-    lon0 = (zone_number - 1) * 6 - 180 + 3
-
-    lat_rad = math.radians(lat)
-    lon_rad = math.radians(lon)
-    lon0_rad = math.radians(lon0)
-
-    N = a / math.sqrt(1 - e_sq * math.sin(lat_rad) ** 2)
-    T = math.tan(lat_rad) ** 2
-    C = (e_sq / (1 - e_sq)) * math.cos(lat_rad) ** 2
-    A = (lon_rad - lon0_rad) * math.cos(lat_rad)
-
-    M = a * (
-        (1 - e_sq / 4 - 3 * e_sq**2 / 64 - 5 * e_sq**3 / 256) * lat_rad
-        - (3 * e_sq / 8 + 3 * e_sq**2 / 32 + 45 * e_sq**3 / 1024)
-        * math.sin(2 * lat_rad)
-        + (15 * e_sq**2 / 256 + 45 * e_sq**3 / 1024) * math.sin(4 * lat_rad)
-        - (35 * e_sq**3 / 3072) * math.sin(6 * lat_rad)
-    )
-
-    easting = (
-        k0
-        * N
-        * (
-            A
-            + (1 - T + C) * A**3 / 6
-            + (5 - 18 * T + T**2 + 72 * C - 58 * (e_sq / (1 - e_sq)))
-            * A**5
-            / 120
-        )
-        + 500000.0
-    )
-
-    northing = k0 * (
-        M
-        + N
-        * math.tan(lat_rad)
-        * (
-            A**2 / 2
-            + (5 - T + 9 * C + 4 * C**2) * A**4 / 24
-            + (61 - 58 * T + T**2 + 600 * C - 330 * (e_sq / (1 - e_sq)))
-            * A**6
-            / 720
-        )
-    )
-
-    if lat < 0:
-        northing += 10000000.0
-
-    return round(easting, 2), round(northing, 2), zone_number
+# ==============================================================================
+# AUTENTICAÇÃO E GESTÃO DE USUÁRIOS (RBAC)
+# ==============================================================================
 
 
-def add_bg_from_local(image_file):
-    try:
-        with open(image_file, "rb") as image:
-            encoded_string = base64.b64encode(image.read())
-        st.markdown(
-            f"""
-            <style>
-            .stApp {{
-                background-image: url("data:image/png;base64,{encoded_string.decode()}");
-                background-size: cover;
-                background-position: center;
-                background-repeat: no-repeat;
-                background-attachment: fixed;
-            }}
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-    except FileNotFoundError:
-        pass
-
-
-st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
-
-# PLANO DE FUNDO
-add_bg_from_local("logo_empresa.png")
-
-# ESTILOS E AUTENTICAÇÃO
-aplicar_estilo_customizado()
-
-if not tela_login():
-    st.stop()
+def hash_senha(senha):
+    return hashlib.sha256(senha.encode()).hexdigest()
 
 
 def get_connection():
     return sqlite3.connect("central_sondagem.db")
 
 
-def init_db():
+def criar_tabela_usuarios():
     conn = get_connection()
     cursor = conn.cursor()
 
+    # Tabela de usuários com vínculo de sonda_id
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE NOT NULL,
+            senha TEXT NOT NULL,
+            perfil TEXT CHECK(perfil IN ('Admin', 'Geólogo', 'Operador')) NOT NULL,
+            sonda_id INTEGER,
+            FOREIGN KEY(sonda_id) REFERENCES sondas(id)
+        )
+    """)
+
+    # Garante que as tabelas do sistema existam
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sondas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,14 +102,152 @@ def init_db():
         )
     """)
 
+    # Cria usuário Admin padrão caso o banco esteja vazio
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, NULL)",
+            ("admin", hash_senha("admin123"), "Admin"),
+        )
+
     conn.commit()
     conn.close()
 
 
-init_db()
+def verificar_login(usuario, senha):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT perfil, sonda_id FROM usuarios WHERE usuario = ? AND senha = ?",
+        (usuario, hash_senha(senha)),
+    )
+    resultado = cursor.fetchone()
+    conn.close()
+    return resultado if resultado else None
 
 
-def gerar_dashboard_excel_completo():
+def tela_login():
+    criar_tabela_usuarios()
+
+    if "autenticado" not in st.session_state:
+        st.session_state["autenticado"] = False
+        st.session_state["usuario"] = ""
+        st.session_state["perfil"] = ""
+        st.session_state["sonda_id"] = None
+
+    if not st.session_state["autenticado"]:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.subheader("🔐 Acesso ao Sistema")
+            usuario = st.text_input("Usuário")
+            senha = st.text_input("Senha", type="password")
+
+            if st.button("Entrar", type="primary", use_container_width=True):
+                login_info = verificar_login(usuario, senha)
+                if login_info:
+                    st.session_state["autenticado"] = True
+                    st.session_state["usuario"] = usuario
+                    st.session_state["perfil"] = login_info[0]
+                    st.session_state["sonda_id"] = login_info[1]
+                    st.success("Login realizado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
+        return False
+    return True
+
+
+def botao_logout():
+    st.sidebar.markdown(
+        f"👤 **{st.session_state['usuario']}** ({st.session_state['perfil']})"
+    )
+    if st.sidebar.button("Sair / Logout"):
+        st.session_state["autenticado"] = False
+        st.session_state["usuario"] = ""
+        st.session_state["perfil"] = ""
+        st.session_state["sonda_id"] = None
+        st.rerun()
+
+
+# ==============================================================================
+# UTILITÁRIOS E EXPORTAÇÃO EXCEL
+# ==============================================================================
+
+
+def latlon_to_utm(lat, lon):
+    if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
+        return 0.0, 0.0, 0
+    a = 6378137.0
+    f = 1 / 298.257223563
+    b = a * (1 - f)
+    e_sq = (a**2 - b**2) / (a**2)
+    k0 = 0.9996
+    zone_number = int((lon + 180) / 6) + 1
+    lon0 = (zone_number - 1) * 6 - 180 + 3
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    lon0_rad = math.radians(lon0)
+    N = a / math.sqrt(1 - e_sq * math.sin(lat_rad) ** 2)
+    T = math.tan(lat_rad) ** 2
+    C = (e_sq / (1 - e_sq)) * math.cos(lat_rad) ** 2
+    A = (lon_rad - lon0_rad) * math.cos(lat_rad)
+    M = a * (
+        (1 - e_sq / 4 - 3 * e_sq**2 / 64 - 5 * e_sq**3 / 256) * lat_rad
+        - (3 * e_sq / 8 + 3 * e_sq**2 / 32 + 45 * e_sq**3 / 1024)
+        * math.sin(2 * lat_rad)
+        + (15 * e_sq**2 / 256 + 45 * e_sq**3 / 1024) * math.sin(4 * lat_rad)
+        - (35 * e_sq**3 / 3072) * math.sin(6 * lat_rad)
+    )
+    easting = (
+        k0
+        * N
+        * (
+            A
+            + (1 - T + C) * A**3 / 6
+            + (5 - 18 * T + T**2 + 72 * C - 58 * (e_sq / (1 - e_sq)))
+            * A**5
+            / 120
+        )
+        + 500000.0
+    )
+    northing = k0 * (
+        M
+        + N
+        * math.tan(lat_rad)
+        * (
+            A**2 / 2
+            + (5 - T + 9 * C + 4 * C**2) * A**4 / 24
+            + (61 - 58 * T + T**2 + 600 * C - 330 * (e_sq / (1 - e_sq)))
+            * A**6
+            / 720
+        )
+    )
+    if lat < 0:
+        northing += 10000000.0
+    return round(easting, 2), round(northing, 2), zone_number
+
+
+def add_bg_from_local(image_file):
+    try:
+        with open(image_file, "rb") as image:
+            encoded_string = base64.b64encode(image.read())
+        st.markdown(
+            f"""
+            <style>
+            .stApp {{
+                background-image: url("data:image/png;base64,{encoded_string.decode()}");
+                background-size: cover; background-position: center;
+                background-repeat: no-repeat; background-attachment: fixed;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except FileNotFoundError:
+        pass
+
+
+def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
 
@@ -214,37 +276,46 @@ def gerar_dashboard_excel_completo():
     )
 
     conn = get_connection()
-    df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
-    df_furos = pd.read_sql_query("SELECT * FROM furos", conn)
-    df_prod = pd.read_sql_query(
-        """
-        SELECT p.*, s.codigo as sonda_codigo 
-        FROM producao_diaria p
-        LEFT JOIN sondas s ON p.sonda_id = s.id
-    """,
-        conn,
-    )
-    df_geo = pd.read_sql_query(
-        """
-        SELECT id, furo_id, de_m, ate_m, 
-               (ate_m - de_m) as avanco_m,
-               recuperacao_m, 
-               ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
-               rqd_m, 
-               ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct,
-               litologia, n_amostra, descricao_geologica, observacoes
-        FROM boletim_geologico
-        ORDER BY furo_id, de_m ASC
-    """,
-        conn,
-    )
+
+    if perfil_usuario == "Admin":
+        df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id",
+            conn,
+        )
+        df_geo = pd.read_sql_query(
+            """
+            SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
+                   ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
+                   rqd_m, ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes
+            FROM boletim_geologico ORDER BY furo_id, de_m ASC
+        """,
+            conn,
+        )
+    else:
+        df_sondas = pd.read_sql_query(
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(user_sonda_id,)
+        )
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?",
+            conn,
+            params=(user_sonda_id,),
+        )
+        df_geo = pd.read_sql_query(
+            """
+            SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
+                   ROUND((bg.recuperacao_m / (bg.ate_m - bg.de_m)) * 100, 1) as recuperacao_pct,
+                   bg.rqd_m, ROUND((bg.rqd_m / (bg.ate_m - bg.de_m)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes
+            FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
+        """,
+            conn,
+            params=(user_sonda_id,),
+        )
     conn.close()
 
-    # ABA 1: DASHBOARD GERAL
     ws_dash = wb.active
     ws_dash.title = "📌 Dashboard Executivo"
     ws_dash.views.sheetView[0].showGridLines = True
-
     ws_dash.merge_cells("A1:H1")
     ws_dash["A1"] = "DASHBOARD EXECUTIVO — CONTROLE INTEGRADO DE SONDAGEM"
     ws_dash["A1"].font = fonte_titulo
@@ -280,18 +351,16 @@ def gerar_dashboard_excel_completo():
         ws_dash[r_lbl.split(":")[0]] = lbl
         ws_dash[r_lbl.split(":")[0]].font = fonte_card_lbl
         ws_dash[r_lbl.split(":")[0]].alignment = Alignment(horizontal="center")
-
         ws_dash.merge_cells(r_val)
         ws_dash[r_val.split(":")[0]] = val
         ws_dash[r_val.split(":")[0]].font = fonte_card_num
         ws_dash[r_val.split(":")[0]].alignment = Alignment(horizontal="center")
-
         for row in ws_dash[r_box]:
             for cell in row:
                 cell.fill = cor_card
                 cell.border = borda_caixa
 
-    # ABA 2: SONDAS
+    # Sondas Sheet
     ws_sondas = wb.create_sheet(title="🚜 Sondas & Equipes")
     ws_sondas.views.sheetView[0].showGridLines = True
     headers_sondas = [
@@ -301,14 +370,12 @@ def gerar_dashboard_excel_completo():
         "Projeto / Frente",
         "Status Atual",
     ]
-
     for c_idx, h in enumerate(headers_sondas, 1):
         cell = ws_sondas.cell(row=1, column=c_idx, value=h)
         cell.font = fonte_cabecalho
         cell.fill = cor_cabecalho
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = borda_caixa
-
     for r_idx, row in df_sondas.iterrows():
         curr_row = r_idx + 2
         values = [
@@ -324,15 +391,8 @@ def gerar_dashboard_excel_completo():
             cell.border = borda_caixa
             if r_idx % 2 == 0:
                 cell.fill = cor_zebra
-            if c_idx == 5:
-                if val == "Operando":
-                    cell.fill = PatternFill(start_color="D9EAD3", fill_type="solid")
-                elif val == "Parada":
-                    cell.fill = PatternFill(start_color="FFF2CC", fill_type="solid")
-                else:
-                    cell.fill = PatternFill(start_color="F4CCCC", fill_type="solid")
 
-    # ABA 3: APONTAMENTO DIÁRIO
+    # Produção Sheet
     ws_prod = wb.create_sheet(title="📝 Apontamento Diário")
     ws_prod.views.sheetView[0].showGridLines = True
     headers_prod = [
@@ -346,14 +406,12 @@ def gerar_dashboard_excel_completo():
         "Horas Paradas",
         "Motivo Parada",
     ]
-
     for c_idx, h in enumerate(headers_prod, 1):
         cell = ws_prod.cell(row=1, column=c_idx, value=h)
         cell.font = fonte_cabecalho
         cell.fill = cor_cabecalho
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = borda_caixa
-
     for r_idx, row in df_prod.iterrows():
         curr_row = r_idx + 2
         avanco = row["prof_final"] - row["prof_inicial"]
@@ -375,7 +433,7 @@ def gerar_dashboard_excel_completo():
             if r_idx % 2 == 0:
                 cell.fill = cor_zebra
 
-    # ABA 4: BOLETIM GEOLÓGICO
+    # Boletim Sheet
     ws_geo = wb.create_sheet(title="⛏️ Boletim Geológico")
     ws_geo.views.sheetView[0].showGridLines = True
     headers_geo = [
@@ -392,14 +450,12 @@ def gerar_dashboard_excel_completo():
         "Descrição Geológica",
         "Observações",
     ]
-
     for c_idx, h in enumerate(headers_geo, 1):
         cell = ws_geo.cell(row=1, column=c_idx, value=h)
         cell.font = fonte_cabecalho
         cell.fill = cor_cabecalho
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = borda_caixa
-
     for r_idx, row in df_geo.iterrows():
         curr_row = r_idx + 2
         values = [
@@ -423,35 +479,6 @@ def gerar_dashboard_excel_completo():
             if r_idx % 2 == 0:
                 cell.fill = cor_zebra
 
-            if c_idx == 8:
-                rqd_val = val if val is not None else 0
-                if rqd_val >= 75:
-                    cell.fill = PatternFill(start_color="D9EAD3", fill_type="solid")
-                elif rqd_val >= 50:
-                    cell.fill = PatternFill(start_color="FFF2CC", fill_type="solid")
-                elif rqd_val >= 25:
-                    cell.fill = PatternFill(start_color="FCE5CD", fill_type="solid")
-                else:
-                    cell.fill = PatternFill(start_color="F4CCCC", fill_type="solid")
-
-    if not df_geo.empty:
-        chart = BarChart()
-        chart.type = "col"
-        chart.style = 10
-        chart.title = "Variação de RQD (%) por Intervalo de Furo"
-        chart.y_axis.title = "RQD (%)"
-        chart.x_axis.title = "Avanço / Furo"
-
-        data = Reference(ws_geo, min_col=8, min_row=1, max_row=len(df_geo) + 1)
-        cats = Reference(ws_geo, min_col=3, min_row=2, max_row=len(df_geo) + 1)
-
-        chart.add_data(data, titles_from_data=True)
-        chart.set_categories(cats)
-        chart.legend = None
-        chart.width = 18
-        chart.height = 10
-        ws_geo.add_chart(chart, "N2")
-
     for sheet in wb.worksheets:
         for col in sheet.columns:
             max_len = 0
@@ -466,49 +493,73 @@ def gerar_dashboard_excel_completo():
     return output
 
 
+# ==============================================================================
+# INICIALIZAÇÃO DA APLICAÇÃO
+# ==============================================================================
+
+st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
+add_bg_from_local("logo_empresa.png")
+aplicar_estilo_customizado()
+
+if not tela_login():
+    st.stop()
+
+perfil_atual = st.session_state["perfil"]
+sonda_id_atual = st.session_state["sonda_id"]
+
 # NAVEGAÇÃO STREAMLIT & SIDEBAR
 st.sidebar.title("🛠️ CENTRAL DE CONTROLE")
 botao_logout()
 st.sidebar.markdown("---")
 
-opcao = st.sidebar.radio(
-    "Navegação",
-    [
-        "📊 Dashboard Geral",
-        "🚜 Cadastro de Sondas",
-        "📝 Apontamento Diário",
-        "📍 Controle de Furos",
-        "⛏️ Boletim Geológico",
-    ],
-)
+opcoes_menu = [
+    "📊 Dashboard Geral",
+    "🚜 Cadastro de Sondas",
+    "📝 Apontamento Diário",
+    "📍 Controle de Furos",
+    "⛏️ Boletim Geológico",
+]
 
-excel_mestre = gerar_dashboard_excel_completo()
+if perfil_atual == "Admin":
+    opcoes_menu.append("👥 Gestão de Usuários")
+
+opcao = st.sidebar.radio("Navegação", opcoes_menu)
+
+excel_mestre = gerar_dashboard_excel_completo(perfil_atual, sonda_id_atual)
 st.sidebar.markdown("---")
 st.sidebar.download_button(
     label="📊 Exportar Planilha Mestra",
     data=excel_mestre,
-    file_name=f"Dashboard_Geral_Sondagem_{date.today()}.xlsx",
+    file_name=f"Dashboard_Sondagem_{date.today()}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     type="primary",
     use_container_width=True,
 )
 
+# ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL
+# ------------------------------------------------------------------------------
 if opcao == "📊 Dashboard Geral":
     st.title("📊 Painel Geral de Operações")
     st.caption("Visão macro da produção e disponibilidade de equipamentos.")
     st.markdown("---")
 
     conn = get_connection()
-    df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
-    df_prod = pd.read_sql_query(
-        """
-        SELECT p.*, s.codigo as sonda_codigo 
-        FROM producao_diaria p
-        JOIN sondas s ON p.sonda_id = s.id
-    """,
-        conn,
-    )
+    if perfil_atual == "Admin":
+        df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id",
+            conn,
+        )
+    else:
+        df_sondas = pd.read_sql_query(
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
+        )
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
     conn.close()
 
     sondas_total = len(df_sondas)
@@ -526,9 +577,7 @@ if opcao == "📊 Dashboard Geral":
             (hrs_trab / (hrs_trab + hrs_par) * 100) if (hrs_trab + hrs_par) > 0 else 0
         )
     else:
-        metros_hoje = 0.0
-        metros_acumulados = 0.0
-        eficiencia = 0.0
+        metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
 
     media_por_sonda = metros_hoje / sondas_op if sondas_op > 0 else 0
 
@@ -550,7 +599,6 @@ if opcao == "📊 Dashboard Geral":
     if not df_sondas.empty:
         cols = st.columns(min(max(sondas_total, 1), 4))
         status_emojis = {"Operando": "🟢", "Parada": "🟡", "Manutenção": "🔴"}
-
         for i, (_, sonda) in enumerate(df_sondas.iterrows()):
             with cols[i % 4]:
                 with st.container(border=True):
@@ -560,137 +608,175 @@ if opcao == "📊 Dashboard Geral":
                     st.write(f"**Projeto:** {sonda['projeto']}")
                     st.write(f"**Status:** {sonda['status']}")
     else:
-        st.info("Nenhuma sonda cadastrada no sistema.")
+        st.info("Nenhuma sonda vinculada a este perfil.")
 
+# ------------------------------------------------------------------------------
 # 2. CADASTRO DE SONDAS
+# ------------------------------------------------------------------------------
 elif opcao == "🚜 Cadastro de Sondas":
     st.title("🚜 Gestão de Sondas")
     st.caption("Controle e atualização do parque de equipamentos.")
     st.markdown("---")
 
     conn = get_connection()
-    df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+    if perfil_atual == "Admin":
+        df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+    else:
+        df_sondas = pd.read_sql_query(
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
+        )
     conn.close()
 
-    tab_lista, tab_novo, tab_editar = st.tabs(
-        ["📋 Sondas Cadastradas", "➕ Nova Sonda", "✏️ Editar Sonda"]
-    )
+    if perfil_atual == "Admin":
+        tab_lista, tab_novo, tab_editar = st.tabs(
+            ["📋 Sondas Cadastradas", "➕ Nova Sonda", "✏️ Editar Sonda"]
+        )
+    else:
+        tab_lista = st.container()
 
     with tab_lista:
         if not df_sondas.empty:
             st.dataframe(df_sondas, use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhuma sonda cadastrada.")
+            st.info("Nenhuma sonda encontrada.")
 
-    with tab_novo:
-        with st.container(border=True):
-            with st.form("form_sonda", clear_on_submit=True):
-                st.subheader("Cadastrar Nova Sonda")
-                c1, c2 = st.columns(2)
-                codigo = c1.text_input("Identificação (ex: SD-01)")
-                equipe = c2.text_input("Equipe Responsável")
-
-                c3, c4 = st.columns(2)
-                projeto = c3.text_input("Frente / Projeto")
-                status = c4.selectbox(
-                    "Status Atual", ["Operando", "Parada", "Manutenção"]
-                )
-
-                btn_salvar = st.form_submit_button(
-                    "Cadastrar Sonda", type="primary", use_container_width=True
-                )
-
-                if btn_salvar and codigo and equipe and projeto:
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute(
-                            "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)",
-                            (codigo, equipe, projeto, status),
-                        )
-                        conn.commit()
-                        st.success(f"Sonda '{codigo}' cadastrada!")
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Esta identificação já existe.")
-                    finally:
-                        conn.close()
-
-    with tab_editar:
-        if not df_sondas.empty:
+    if perfil_atual == "Admin":
+        with tab_novo:
             with st.container(border=True):
-                with st.form("form_edit_sonda"):
-                    st.subheader("Editar Dados da Sonda")
-                    sonda_para_editar = st.selectbox(
-                        "Selecione a Sonda", df_sondas["codigo"].tolist()
-                    )
-                    dados_sonda = df_sondas[
-                        df_sondas["codigo"] == sonda_para_editar
-                    ].iloc[0]
-
+                with st.form("form_sonda", clear_on_submit=True):
+                    st.subheader("Cadastrar Nova Sonda")
                     c1, c2 = st.columns(2)
-                    novo_codigo = c1.text_input(
-                        "Código Oficial", value=dados_sonda["codigo"]
-                    )
-                    nova_equipe = c2.text_input("Equipe", value=dados_sonda["equipe"])
+                    codigo = c1.text_input("Identificação (ex: SD-01)")
+                    equipe = c2.text_input("Equipe Responsável")
 
                     c3, c4 = st.columns(2)
-                    novo_projeto = c3.text_input("Projeto", value=dados_sonda["projeto"])
-                    novo_status = c4.selectbox(
-                        "Status",
-                        ["Operando", "Parada", "Manutenção"],
-                        index=["Operando", "Parada", "Manutenção"].index(
-                            dados_sonda["status"]
-                        ),
+                    projeto = c3.text_input("Frente / Projeto")
+                    status = c4.selectbox(
+                        "Status Atual", ["Operando", "Parada", "Manutenção"]
                     )
 
-                    btn_atualizar = st.form_submit_button(
-                        "Atualizar Cadastro", type="primary", use_container_width=True
+                    btn_salvar = st.form_submit_button(
+                        "Cadastrar Sonda", type="primary", use_container_width=True
                     )
 
-                    if btn_atualizar:
+                    if btn_salvar and codigo and equipe and projeto:
                         conn = get_connection()
                         cursor = conn.cursor()
                         try:
                             cursor.execute(
-                                "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?, status = ? WHERE id = ?",
-                                (
-                                    novo_codigo,
-                                    nova_equipe,
-                                    novo_projeto,
-                                    novo_status,
-                                    int(dados_sonda["id"]),
-                                ),
+                                "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)",
+                                (codigo, equipe, projeto, status),
                             )
                             conn.commit()
-                            st.success(f"Sonda atualizada para '{novo_codigo}'!")
+                            st.success(f"Sonda '{codigo}' cadastrada!")
                             st.rerun()
                         except sqlite3.IntegrityError:
-                            st.error("O novo código já pertence a outra sonda.")
+                            st.error("Esta identificação já existe.")
                         finally:
                             conn.close()
-        else:
-            st.info("Cadastre uma sonda para habilitar a edição.")
 
+        with tab_editar:
+            if not df_sondas.empty:
+                with st.container(border=True):
+                    with st.form("form_edit_sonda"):
+                        st.subheader("Editar Dados da Sonda")
+                        sonda_para_editar = st.selectbox(
+                            "Selecione a Sonda", df_sondas["codigo"].tolist()
+                        )
+                        dados_sonda = df_sondas[
+                            df_sondas["codigo"] == sonda_para_editar
+                        ].iloc[0]
+
+                        c1, c2 = st.columns(2)
+                        novo_codigo = c1.text_input(
+                            "Código Oficial", value=dados_sonda["codigo"]
+                        )
+                        nova_equipe = c2.text_input(
+                            "Equipe", value=dados_sonda["equipe"]
+                        )
+
+                        c3, c4 = st.columns(2)
+                        novo_projeto = c3.text_input(
+                            "Projeto", value=dados_sonda["projeto"]
+                        )
+                        novo_status = c4.selectbox(
+                            "Status",
+                            ["Operando", "Parada", "Manutenção"],
+                            index=["Operando", "Parada", "Manutenção"].index(
+                                dados_sonda["status"]
+                            ),
+                        )
+
+                        btn_atualizar = st.form_submit_button(
+                            "Atualizar Cadastro",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                        if btn_atualizar:
+                            conn = get_connection()
+                            cursor = conn.cursor()
+                            try:
+                                cursor.execute(
+                                    "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?, status = ? WHERE id = ?",
+                                    (
+                                        novo_codigo,
+                                        nova_equipe,
+                                        novo_projeto,
+                                        novo_status,
+                                        int(dados_sonda["id"]),
+                                    ),
+                                )
+                                conn.commit()
+                                st.success(f"Sonda '{novo_codigo}' atualizada!")
+                                st.rerun()
+                            except sqlite3.IntegrityError:
+                                st.error("O novo código já pertence a outra sonda.")
+                            finally:
+                                conn.close()
+
+# ------------------------------------------------------------------------------
 # 3. APONTAMENTO DIÁRIO
+# ------------------------------------------------------------------------------
 elif opcao == "📝 Apontamento Diário":
     st.title("📝 Apontamento Diário de Produção")
     st.caption("Registro de avanço físico e tempos de paralisação.")
     st.markdown("---")
 
     conn = get_connection()
-    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
-    df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
-    df_prod_full = pd.read_sql_query(
-        """
-        SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
-               (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
-        FROM producao_diaria p
-        LEFT JOIN sondas s ON p.sonda_id = s.id
-        ORDER BY p.data DESC, p.id DESC
-    """,
-        conn,
-    )
+    if perfil_atual == "Admin":
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+        df_prod_full = pd.read_sql_query(
+            """
+            SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
+                   (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
+            FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id
+            ORDER BY p.data DESC, p.id DESC
+        """,
+            conn,
+        )
+    else:
+        df_sondas = pd.read_sql_query(
+            "SELECT id, codigo FROM sondas WHERE id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
+        df_furos = pd.read_sql_query(
+            "SELECT id FROM furos WHERE sonda_id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
+        df_prod_full = pd.read_sql_query(
+            """
+            SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
+                   (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
+            FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id
+            WHERE p.sonda_id = ? ORDER BY p.data DESC, p.id DESC
+        """,
+            conn,
+            params=(sonda_id_atual,),
+        )
     conn.close()
 
     tab_historico, tab_novo, tab_excluir = st.tabs(
@@ -748,7 +834,7 @@ elif opcao == "📝 Apontamento Diário":
                     )
 
                     if btn_reg and prof_fim >= prof_in:
-                        sonda_id = int(
+                        s_id = int(
                             df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
                         )
                         conn = get_connection()
@@ -760,7 +846,7 @@ elif opcao == "📝 Apontamento Diário":
                             """,
                             (
                                 str(data_reg),
-                                sonda_id,
+                                s_id,
                                 furo_sel,
                                 prof_in,
                                 prof_fim,
@@ -771,10 +857,10 @@ elif opcao == "📝 Apontamento Diário":
                         )
                         conn.commit()
                         conn.close()
-                        st.success("Apontamento registrado com sucesso!")
+                        st.success("Apontamento registrado!")
                         st.rerun()
         else:
-            st.warning("Cadastre ao menos uma sonda para realizar apontamentos.")
+            st.warning("Nenhuma sonda vinculada disponível para lançamento.")
 
     with tab_excluir:
         if not df_prod_full.empty:
@@ -786,7 +872,6 @@ elif opcao == "📝 Apontamento Diário":
                     ),
                     axis=1,
                 ).tolist()
-
                 apontamento_sel = st.selectbox(
                     "Selecione o registro para remoção:", opcoes_prod_excluir
                 )
@@ -805,15 +890,29 @@ elif opcao == "📝 Apontamento Diário":
                     st.success("Apontamento removido com sucesso!")
                     st.rerun()
 
+# ------------------------------------------------------------------------------
 # 4. CONTROLE DE FUROS
+# ------------------------------------------------------------------------------
 elif opcao == "📍 Controle de Furos":
     st.title("📍 Controle de Furos de Sondagem")
     st.caption("Planejamento e dados geográficos de cada perfuração.")
     st.markdown("---")
 
     conn = get_connection()
-    df_furos_full = pd.read_sql_query("SELECT * FROM furos", conn)
-    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    if perfil_atual == "Admin":
+        df_furos_full = pd.read_sql_query("SELECT * FROM furos", conn)
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    else:
+        df_furos_full = pd.read_sql_query(
+            "SELECT * FROM furos WHERE sonda_id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
+        df_sondas = pd.read_sql_query(
+            "SELECT id, codigo FROM sondas WHERE id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
     conn.close()
 
     tab_lista, tab_novo, tab_excluir = st.tabs(
@@ -831,10 +930,9 @@ elif opcao == "📍 Controle de Furos":
             with st.container(border=True):
                 st.subheader("Cadastrar Novo Furo")
                 st.caption(
-                    "Clique no botão abaixo para capturar a localização atual da sonda/dispositivo."
+                    "Clique abaixo para obter as coordenadas via GPS do dispositivo."
                 )
 
-                # CAPTURA DE GPS NATIVA VIA STREAMLIT-GEOLOCATION
                 location = streamlit_geolocation()
 
                 if location and location.get("latitude"):
@@ -877,7 +975,7 @@ elif opcao == "📍 Controle de Furos":
                     )
 
                     if btn_furo and id_furo and sonda_furo:
-                        sonda_id = int(
+                        s_id = int(
                             df_sondas[df_sondas["codigo"] == sonda_furo][
                                 "id"
                             ].values[0]
@@ -886,13 +984,10 @@ elif opcao == "📍 Controle de Furos":
                         cursor = conn.cursor()
                         try:
                             cursor.execute(
-                                """
-                                INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada)
-                                VALUES (?, ?, ?, ?, ?, ?)
-                                """,
+                                "INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada) VALUES (?, ?, ?, ?, ?, ?)",
                                 (
                                     id_furo,
-                                    sonda_id,
+                                    s_id,
                                     coord_e,
                                     coord_n,
                                     cota,
@@ -907,7 +1002,7 @@ elif opcao == "📍 Controle de Furos":
                         finally:
                             conn.close()
         else:
-            st.warning("Cadastre ao menos uma sonda para alocar furos.")
+            st.warning("Nenhuma sonda disponível para alocar furos.")
 
     with tab_excluir:
         if not df_furos_full.empty:
@@ -916,10 +1011,6 @@ elif opcao == "📍 Controle de Furos":
                 furo_para_excluir = st.selectbox(
                     "Selecione o Furo:", df_furos_full["id"].tolist()
                 )
-                st.warning(
-                    "⚠️ Ação Irreversível: Ao excluir o furo, todos os apontamentos e boletins associados serão removidos."
-                )
-
                 if st.button(
                     "❌ Confirmar Exclusão do Furo",
                     type="secondary",
@@ -943,17 +1034,28 @@ elif opcao == "📍 Controle de Furos":
                     st.success(f"Furo {furo_para_excluir} removido!")
                     st.rerun()
 
+# ------------------------------------------------------------------------------
 # 5. BOLETIM GEOLÓGICO
+# ------------------------------------------------------------------------------
 elif opcao == "⛏️ Boletim Geológico":
     st.title("⛏️ Boletim Geológico de Sondagem")
     st.caption("Descrição litológica, recuperação de testemunho e cálculo RQD.")
     st.markdown("---")
 
     conn = get_connection()
-    df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+    if perfil_atual == "Admin":
+        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+    else:
+        df_furos = pd.read_sql_query(
+            "SELECT id FROM furos WHERE sonda_id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
 
     if df_furos.empty:
-        st.warning("Cadastre um furo antes de acessar o boletim geológico.")
+        st.warning(
+            "Nenhum furo associado disponível para registrar boletim geológico."
+        )
         conn.close()
     else:
         furo_selecionado = st.selectbox(
@@ -962,17 +1064,12 @@ elif opcao == "⛏️ Boletim Geológico":
 
         df_geo = pd.read_sql_query(
             """
-            SELECT id, de_m, ate_m, 
-                   (ate_m - de_m) as avanco_m,
-                   recuperacao_m, 
+            SELECT id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
                    ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
-                   rqd_m, 
-                   ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct,
+                   rqd_m, ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct,
                    litologia, n_amostra, descricao_geologica, observacoes
-            FROM boletim_geologico
-            WHERE furo_id = ?
-            ORDER BY de_m ASC
-            """,
+            FROM boletim_geologico WHERE furo_id = ? ORDER BY de_m ASC
+        """,
             conn,
             params=(furo_selecionado,),
         )
@@ -1035,5 +1132,89 @@ elif opcao == "⛏️ Boletim Geológico":
                         )
                         conn.commit()
                         conn.close()
-                        st.success("Trecho geológico adicionado com sucesso!")
+                        st.success("Trecho geológico adicionado!")
                         st.rerun()
+
+# ------------------------------------------------------------------------------
+# 6. GESTÃO DE USUÁRIOS (APENAS PERFIL ADMIN)
+# ------------------------------------------------------------------------------
+elif opcao == "👥 Gestão de Usuários" and perfil_atual == "Admin":
+    st.title("👥 Gestão de Usuários e Permissões")
+    st.caption("Cadastre novos operadores e vincule cada um à sua respectiva sonda.")
+    st.markdown("---")
+
+    conn = get_connection()
+    df_users = pd.read_sql_query(
+        """
+        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada
+        FROM usuarios u LEFT JOIN sondas s ON u.sonda_id = s.id
+    """,
+        conn,
+    )
+    df_sondas_cad = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    conn.close()
+
+    tab_usr_lista, tab_usr_novo = st.tabs(
+        ["📋 Usuários Cadastrados", "➕ Novo Usuário"]
+    )
+
+    with tab_usr_lista:
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+
+    with tab_usr_novo:
+        with st.container(border=True):
+            with st.form("form_novo_usuario", clear_on_submit=True):
+                st.subheader("Cadastrar Novo Usuário")
+                c1, c2 = st.columns(2)
+                novo_user = c1.text_input("Nome de Usuário (Login)")
+                nova_senha = c2.text_input("Senha", type="password")
+
+                c3, c4 = st.columns(2)
+                perfil_sel = c3.selectbox(
+                    "Perfil de Acesso", ["Operador", "Geólogo", "Admin"]
+                )
+
+                sondas_opcoes = ["Nenhuma / Acesso Total (Admin)"] + (
+                    df_sondas_cad["codigo"].tolist()
+                    if not df_sondas_cad.empty
+                    else []
+                )
+                sonda_vinculo = c4.selectbox(
+                    "Vincular à Sonda (Campo)", sondas_opcoes
+                )
+
+                btn_cad_user = st.form_submit_button(
+                    "Salvar Usuário", type="primary", use_container_width=True
+                )
+
+                if btn_cad_user and novo_user and nova_senha:
+                    s_id_val = None
+                    if (
+                        sonda_vinculo != "Nenhuma / Acesso Total (Admin)"
+                        and not df_sondas_cad.empty
+                    ):
+                        s_id_val = int(
+                            df_sondas_cad[df_sondas_cad["codigo"] == sonda_vinculo][
+                                "id"
+                            ].values[0]
+                        )
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (
+                                novo_user,
+                                hash_senha(nova_senha),
+                                perfil_sel,
+                                s_id_val,
+                            ),
+                        )
+                        conn.commit()
+                        st.success(f"Usuário '{novo_user}' criado com sucesso!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Este nome de usuário já está em uso.")
+                    finally:
+                        conn.close()
