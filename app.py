@@ -1289,3 +1289,203 @@ elif opcao == "👥 Gestão de Usuários":
                         st.error("Este nome de usuário já existe.")
                     finally:
                         conn.close()
+
+# ------------------------------------------------------------------------------
+# 6. GESTÃO DE USUÁRIOS (ADMINISTRADOR)
+# ------------------------------------------------------------------------------
+elif opcao == "👥 Gestão de Usuários":
+    st.title("👥 Gestão de Usuários e Acessos")
+    st.caption(
+        "Cadastro de operadores, geólogos e controle de permissões por sonda."
+    )
+    st.markdown("---")
+
+    conn = get_connection()
+    df_usuarios = pd.read_sql_query(
+        """
+        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada 
+        FROM usuarios u 
+        LEFT JOIN sondas s ON u.sonda_id = s.id
+    """,
+        conn,
+    )
+    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    conn.close()
+
+    tab_usr_lista, tab_usr_novo, tab_usr_editar, tab_usr_excluir = st.tabs(
+        [
+            "📋 Usuários Cadastrados",
+            "➕ Novo Usuário",
+            "✏️ Editar Permissão",
+            "🗑️ Excluir Usuário",
+        ]
+    )
+
+    # 1. LISTAGEM
+    with tab_usr_lista:
+        if not df_usuarios.empty:
+            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum usuário cadastrado.")
+
+    # 2. NOVO USUÁRIO
+    with tab_usr_novo:
+        with st.container(border=True):
+            with st.form("form_novo_usuario", clear_on_submit=True):
+                st.subheader("Criar Novo Usuário")
+                c1, c2 = st.columns(2)
+                novo_usuario = c1.text_input("Nome de Usuário (Login)")
+                nova_senha = c2.text_input("Senha", type="password")
+
+                c3, c4 = st.columns(2)
+                novo_perfil = c3.selectbox(
+                    "Perfil de Acesso", ["Admin", "Geólogo", "Operador"]
+                )
+
+                sondas_lista = ["Nenhuma (Acesso Total)"] + (
+                    df_sondas["codigo"].tolist() if not df_sondas.empty else []
+                )
+                sonda_selecionada = c4.selectbox(
+                    "Vincular à Sonda Específica", sondas_lista
+                )
+
+                btn_criar_usr = st.form_submit_button(
+                    "Cadastrar Usuário",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+                if btn_criar_usr and novo_usuario and nova_senha:
+                    s_id = None
+                    if (
+                        sonda_selecionada != "Nenhuma (Acesso Total)"
+                        and not df_sondas.empty
+                    ):
+                        s_id = int(
+                            df_sondas[df_sondas["codigo"] == sonda_selecionada][
+                                "id"
+                            ].values[0]
+                        )
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (
+                                novo_usuario,
+                                hash_senha(nova_senha),
+                                novo_perfil,
+                                s_id,
+                            ),
+                        )
+                        conn.commit()
+                        st.success(
+                            f"Usuário '{novo_usuario}' criado com sucesso!"
+                        )
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Este nome de usuário já existe.")
+                    finally:
+                        conn.close()
+
+    # 3. EDITAR PERMISSÃO / SONDA VINCULADA
+    with tab_usr_editar:
+        if not df_usuarios.empty:
+            with st.container(border=True):
+                with st.form("form_edit_usuario"):
+                    st.subheader("Alterar Perfil ou Vínculo de Sonda")
+                    usr_sel = st.selectbox(
+                        "Selecione o Usuário", df_usuarios["usuario"].tolist()
+                    )
+                    dados_usr = df_usuarios[
+                        df_usuarios["usuario"] == usr_sel
+                    ].iloc[0]
+
+                    c1, c2 = st.columns(2)
+                    edit_perfil = c1.selectbox(
+                        "Novo Perfil",
+                        ["Admin", "Geólogo", "Operador"],
+                        index=["Admin", "Geólogo", "Operador"].index(
+                            dados_usr["perfil"]
+                        ),
+                    )
+
+                    sondas_lista = ["Nenhuma (Acesso Total)"] + (
+                        df_sondas["codigo"].tolist()
+                        if not df_sondas.empty
+                        else []
+                    )
+                    idx_sonda = 0
+                    if (
+                        dados_usr["sonda_vinculada"]
+                        and dados_usr["sonda_vinculada"] in sondas_lista
+                    ):
+                        idx_sonda = sondas_lista.index(
+                            dados_usr["sonda_vinculada"]
+                        )
+
+                    edit_sonda = c2.selectbox(
+                        "Nova Sonda Vinculada",
+                        sondas_lista,
+                        index=idx_sonda,
+                    )
+
+                    btn_edit_usr = st.form_submit_button(
+                        "Atualizar Permissões",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                    if btn_edit_usr:
+                        s_id = None
+                        if (
+                            edit_sonda != "Nenhuma (Acesso Total)"
+                            and not df_sondas.empty
+                        ):
+                            s_id = int(
+                                df_sondas[df_sondas["codigo"] == edit_sonda][
+                                    "id"
+                                ].values[0]
+                            )
+
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE usuarios SET perfil = ?, sonda_id = ? WHERE id = ?",
+                            (edit_perfil, s_id, int(dados_usr["id"])),
+                        )
+                        conn.commit()
+                        conn.close()
+                        st.success(
+                            f"Permissões de '{usr_sel}' atualizadas com sucesso!"
+                        )
+                        st.rerun()
+
+    # 4. EXCLUIR USUÁRIO
+    with tab_usr_excluir:
+        if not df_usuarios.empty:
+            usuarios_para_deletar = df_usuarios[
+                df_usuarios["usuario"] != st.session_state.get("usuario")
+            ]
+            if not usuarios_para_deletar.empty:
+                usr_del = st.selectbox(
+                    "Selecione o Usuário para Remover",
+                    usuarios_para_deletar["usuario"].tolist(),
+                )
+                if st.button(
+                    "Confirmar Exclusão de Usuário", type="primary"
+                ):
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM usuarios WHERE usuario = ?", (usr_del,)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Usuário '{usr_del}' removido!")
+                    st.rerun()
+            else:
+                st.info(
+                    "Você não pode excluir o próprio usuário que está logado."
+                )
