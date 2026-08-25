@@ -402,10 +402,14 @@ st.sidebar.download_button(
 # COMPONENTES DE TELA DA APLICAÇÃO
 # ==============================================================================
 
+# ==============================================================================
+# COMPONENTES DE TELA DA APLICAÇÃO
+# ==============================================================================
+
 # ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL (ILUMINADO E DESTAQUE DE SONDAS)
 # ------------------------------------------------------------------------------
-elif opcao == "Dashboard Geral":
+if opcao == "Dashboard Geral":
     st.title("⚡ Painel Geral de Operações & Sondas")
     st.markdown("---")
 
