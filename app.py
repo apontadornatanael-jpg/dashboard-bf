@@ -440,7 +440,7 @@ if opcao == "Dashboard Geral":
     else:
         metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
 
-    # Apenas os 4 indicadores KPI principais
+    # Indicadores KPI principais
     c1, c2, c3, c4 = st.columns(4)
     with c1: 
         render_kpi_card("Sondas Vinculadas", f"{sondas_op}/{sondas_total}")
@@ -467,6 +467,22 @@ elif opcao == "Cadastro de Sondas" and perfil_atual == "Admin":
     with tab_lista:
         if not df_sondas.empty:
             st.dataframe(df_sondas, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Sonda")
+            
+            opcoes_sonda = [f"{row['id']} - {row['codigo']} ({row['equipe']})" for _, row in df_sondas.iterrows()]
+            sonda_excluir_str = st.selectbox("Selecione a Sonda para excluir:", opcoes_sonda)
+            sonda_id_excluir = int(sonda_excluir_str.split(" - ")[0])
+
+            if st.button("Excluir Sonda Selecionada", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM sondas WHERE id = ?", (sonda_id_excluir,))
+                conn.commit()
+                conn.close()
+                st.success("Sonda excluída com sucesso!")
+                st.rerun()
         else:
             st.info("Nenhuma sonda cadastrada.")
 
@@ -513,6 +529,22 @@ elif opcao == "Apontamento Diário":
     with tab_hist:
         if not df_prod.empty:
             st.dataframe(df_prod, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Registro de Apontamento")
+            
+            opcoes_prod = [f"ID: {row['id']} | Data: {row['data']} | Furo: {row['furo_id']} | Avanço: {row['avanco']}m" for _, row in df_prod.iterrows()]
+            prod_excluir_str = st.selectbox("Selecione o Apontamento para excluir:", opcoes_prod)
+            prod_id_excluir = int(prod_excluir_str.split(" | ")[0].replace("ID: ", ""))
+
+            if st.button("Excluir Apontamento Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM producao_diaria WHERE id = ?", (prod_id_excluir,))
+                conn.commit()
+                conn.close()
+                st.success("Apontamento excluído com sucesso!")
+                st.rerun()
         else:
             st.info("Nenhum registro encontrado.")
 
@@ -569,6 +601,21 @@ elif opcao == "Controle de Furos":
     with tab_furos_list:
         if not df_furos.empty:
             st.dataframe(df_furos, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Furo")
+            
+            opcoes_furo = df_furos["id"].tolist()
+            furo_excluir = st.selectbox("Selecione o Furo para excluir:", opcoes_furo)
+
+            if st.button("Excluir Furo Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM furos WHERE id = ?", (furo_excluir,))
+                conn.commit()
+                conn.close()
+                st.success(f"Furo '{furo_excluir}' excluído com sucesso!")
+                st.rerun()
         else:
             st.info("Nenhum furo cadastrado.")
 
@@ -653,6 +700,31 @@ elif opcao == "Boletim Geológico":
     with tab_bg_hist:
         if not df_geo.empty:
             st.dataframe(df_geo, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Registro do Boletim")
+            
+            lista_ids = df_geo["id"].tolist()
+            id_para_excluir = st.selectbox("Selecione o ID do registro que deseja remover:", lista_ids)
+            
+            dados_registro = df_geo[df_geo["id"] == id_para_excluir].iloc[0]
+            st.caption(f"Furo: **{dados_registro['furo_id']}** | Trecho: **{dados_registro['de_m']}m - {dados_registro['ate_m']}m** | Litologia: **{dados_registro['litologia']}**")
+            
+            if st.button("Excluir Registro Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM boletim_geologico WHERE id = ?", (int(id_para_excluir),))
+                conn.commit()
+                conn.close()
+
+                try:
+                    supabase = get_supabase_client()
+                    supabase.table("boletim_geologico").delete().eq("id", int(id_para_excluir)).execute()
+                except Exception as e:
+                    pass
+
+                st.success(f"Registro ID {id_para_excluir} excluído com sucesso!")
+                st.rerun()
         else:
             st.info("Nenhum boletim registrado.")
 
@@ -660,10 +732,8 @@ elif opcao == "Boletim Geológico":
         if not df_furos.empty:
             lista_furos = df_furos["id"].tolist()
             
-            # Seleção do furo fora do formulário para atualização em tempo real
             furo_sel = st.selectbox("Selecione o Furo para Registro", lista_furos)
 
-            # Busca a última profundidade gravada (ate_m) para este furo
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(ate_m) FROM boletim_geologico WHERE furo_id = ?", (furo_sel,))
@@ -672,14 +742,12 @@ elif opcao == "Boletim Geológico":
 
             de_auto = float(ultimo_ate) if ultimo_ate is not None else 0.0
 
-            # Entradas de profundidade fora da form para cálculo automático dinâmico do Avanço e Recuperação %
             st.subheader("Intervalo e Métricas de Avanço")
             col_de, col_ate, col_avanco = st.columns(3)
             
             de_m = col_de.number_input("De (m)", min_value=0.0, value=de_auto, step=0.1, key="de_m_input")
             ate_m = col_ate.number_input("Até (m)", min_value=de_m, value=max(de_m, de_auto), step=0.1, key="ate_m_input")
             
-            # Cálculo do Avanço Automático
             avanco_m = round(ate_m - de_m, 2)
             col_avanco.metric("Avanço Automático (m)", f"{avanco_m:.2f} m")
 
@@ -687,7 +755,6 @@ elif opcao == "Boletim Geológico":
                 c1, c2, c3 = st.columns(3)
                 rec_m = c1.number_input("Recuperação (m)", min_value=0.0, max_value=float(avanco_m) if avanco_m > 0 else 999.0, step=0.01)
                 
-                # Cálculo da Recuperação em %
                 rec_pct = (rec_m / avanco_m * 100) if avanco_m > 0 else 0.0
                 c2.text_input("Recuperação (%)", value=f"{rec_pct:.1f}%", disabled=True)
                 
@@ -719,7 +786,6 @@ elif opcao == "Boletim Geológico":
                         conn.commit()
                         conn.close()
 
-                        # Sincronização com o Supabase
                         salvar_boletim_supabase({
                             "furo_id": furo_sel,
                             "de_m": de_m,
@@ -737,6 +803,7 @@ elif opcao == "Boletim Geológico":
                         st.rerun()
         else:
             st.warning("Nenhum furo cadastrado para registrar boletim.")
+
 # ------------------------------------------------------------------------------
 # 6. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN)
 # ------------------------------------------------------------------------------
@@ -749,39 +816,62 @@ elif opcao == "Gestão de Usuários" and perfil_atual == "Admin":
     df_users = pd.read_sql_query("SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada FROM usuarios u LEFT JOIN sondas s ON u.sonda_id = s.id", conn)
     conn.close()
 
-    st.subheader("Usuários Cadastrados")
-    st.dataframe(df_users, use_container_width=True, hide_index=True)
+    tab_u_lista, tab_u_novo = st.tabs(["Usuários Cadastrados", "Novo Usuário"])
 
-    st.markdown("---")
-    st.subheader("Cadastrar / Vincular Novo Usuário")
-    with st.form("form_usr", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        u_nome = c1.text_input("Nome do Usuário")
-        u_senha = c2.text_input("Senha", type="password")
+    with tab_u_lista:
+        if not df_users.empty:
+            st.dataframe(df_users, use_container_width=True, hide_index=True)
 
-        c3, c4 = st.columns(2)
-        u_perfil = c3.selectbox("Perfil de Acesso", ["Operador", "Geólogo", "Admin"])
-        
-        opcoes_sondas = ["Sem Vinculo"] + df_sondas["codigo"].tolist()
-        u_sonda = c4.selectbox("Sonda Autorizada", opcoes_sondas)
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Usuário")
+            
+            # Não permite excluir o usuário admin principal para evitar bloqueio
+            users_filtrados = df_users[df_users["usuario"] != "admin"]
+            
+            if not users_filtrados.empty:
+                opcoes_user = [f"ID: {row['id']} - {row['usuario']} ({row['perfil']})" for _, row in users_filtrados.iterrows()]
+                user_excluir_str = st.selectbox("Selecione o Usuário para excluir:", opcoes_user)
+                user_id_excluir = int(user_excluir_str.split(" - ")[0].replace("ID: ", ""))
 
-        if st.form_submit_button("Cadastrar Usuário", type="primary"):
-            if u_nome and u_senha:
-                s_id = None
-                if u_sonda != "Sem Vinculo":
-                    s_id = int(df_sondas[df_sondas["codigo"] == u_sonda]["id"].values[0])
-
-                conn = get_connection()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute(
-                        "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
-                        (u_nome, hash_senha(u_senha), u_perfil, s_id)
-                    )
+                if st.button("Excluir Usuário Selecionado", type="primary"):
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM usuarios WHERE id = ?", (user_id_excluir,))
                     conn.commit()
-                    st.success(f"Usuário {u_nome} criado com sucesso!")
-                    st.rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Nome de usuário já existente.")
-                finally:
                     conn.close()
+                    st.success("Usuário excluído com sucesso!")
+                    st.rerun()
+            else:
+                st.caption("Apenas o usuário 'admin' principal está cadastrado (protegido contra exclusão).")
+        else:
+            st.info("Nenhum usuário cadastrado.")
+
+    with tab_u_novo:
+        with st.form("form_user", clear_on_submit=True):
+            new_user = st.text_input("Nome do Usuário")
+            new_pass = st.text_input("Senha", type="password")
+            new_perfil = st.selectbox("Perfil", ["Geólogo", "Operador", "Admin"])
+            
+            sonda_opcoes = ["Nenhuma / Admin"] + (df_sondas["codigo"].tolist() if not df_sondas.empty else [])
+            new_sonda = st.selectbox("Sonda Vinculada", sonda_opcoes)
+
+            if st.form_submit_button("Cadastrar Usuário", type="primary"):
+                if new_user and new_pass:
+                    s_id = None
+                    if new_sonda != "Nenhuma / Admin" and not df_sondas.empty:
+                        s_id = int(df_sondas[df_sondas["codigo"] == new_sonda]["id"].values[0])
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (new_user, hash_senha(new_pass), new_perfil, s_id)
+                        )
+                        conn.commit()
+                        st.success("Usuário cadastrado com sucesso!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Usuário já existe.")
+                    finally:
+                        conn.close()
