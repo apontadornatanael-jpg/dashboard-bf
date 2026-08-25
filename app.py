@@ -276,9 +276,19 @@ if opcao == "📊 Dashboard Geral":
         )
     conn.close()
 
-    total_metros = (df_prod["prof_final"] - df_prod["prof_inicial"]).sum() if not df_prod.empty else 0.0
-    total_horas_trab = df_prod["horas_trabalhadas"].sum() if not df_prod.empty else 0.0
-    total_horas_para = df_prod["horas_paradas"].sum() if not df_prod.empty else 0.0
+    # Cálculo seguro de KPIs com tratamento para valores nulos (NaN/None)
+    if not df_prod.empty:
+        prof_final = df_prod["prof_final"].fillna(0.0)
+        prof_inicial = df_prod["prof_inicial"].fillna(0.0)
+        
+        total_metros = float((prof_final - prof_inicial).sum())
+        total_horas_trab = float(df_prod["horas_trabalhadas"].fillna(0.0).sum())
+        total_horas_para = float(df_prod["horas_paradas"].fillna(0.0).sum())
+    else:
+        total_metros = 0.0
+        total_horas_trab = 0.0
+        total_horas_para = 0.0
+
     furos_concluidos = len(df_furos[df_furos["situacao"] == "Concluído"]) if not df_furos.empty else 0
 
     c1, c2, c3, c4 = st.columns(4)
@@ -296,7 +306,7 @@ if opcao == "📊 Dashboard Geral":
         col_graf1, col_graf2 = st.columns(2)
         with col_graf1:
             st.subheader("Avanço Diário (m)")
-            df_prod["avanço"] = df_prod["prof_final"] - df_prod["prof_inicial"]
+            df_prod["avanço"] = df_prod["prof_final"].fillna(0.0) - df_prod["prof_inicial"].fillna(0.0)
             df_diario = df_prod.groupby("data")["avanço"].sum().reset_index()
             st.bar_chart(df_diario.set_index("data"))
         with col_graf2:
