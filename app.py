@@ -1,4 +1,4 @@
-import base64
+adiciona no meu codigo completo: import base64
 
 import hashlib
 
@@ -77,6 +77,16 @@ if "sonda_id" not in st.session_state:
 # CONEXÃO E CONFIGURAÇÃO DO SUPABASE
 
 # ==============================================================================
+
+
+
+# Defina as chaves do Supabase em .streamlit/secrets.toml ou diretamente aqui para testes:
+
+# [supabase]
+
+# url = "https://seu-projeto.supabase.co"
+
+# key = "sua-chave-anon-ou-service-role"
 
 
 
@@ -214,25 +224,7 @@ def criar_tabela_usuarios():
 
 
 
-    cursor.execute("""
-
-        CREATE TABLE IF NOT EXISTS sondas (
-
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-            codigo TEXT UNIQUE NOT NULL,
-
-            equipe TEXT NOT NULL,
-
-            projeto TEXT NOT NULL,
-
-            status TEXT CHECK(status IN ('Operando', 'Parada', 'Manutenção')) DEFAULT 'Operando'
-
-        )
-
-    """)
-
-
+    # Tabela de usuários com vínculo de sonda_id
 
     cursor.execute("""
 
@@ -249,6 +241,28 @@ def criar_tabela_usuarios():
             sonda_id INTEGER,
 
             FOREIGN KEY(sonda_id) REFERENCES sondas(id)
+
+        )
+
+    """)
+
+
+
+    # Tabelas auxiliares
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS sondas (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            codigo TEXT UNIQUE NOT NULL,
+
+            equipe TEXT NOT NULL,
+
+            projeto TEXT NOT NULL,
+
+            status TEXT CHECK(status IN ('Operando', 'Parada', 'Manutenção')) DEFAULT 'Operando'
 
         )
 
@@ -349,6 +363,8 @@ def criar_tabela_usuarios():
     """)
 
 
+
+    # Cria usuário Admin padrão caso o banco esteja vazio
 
     cursor.execute("SELECT COUNT(*) FROM usuarios")
 
@@ -704,9 +720,9 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
 
             SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
 
-                   ROUND((recuperacao_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as recuperacao_pct,
+                   ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
 
-                   rqd_m, ROUND((rqd_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
+                   rqd_m, ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
 
             FROM boletim_geologico ORDER BY furo_id, de_m ASC
 
@@ -740,9 +756,9 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
 
             SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
 
-                   ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as recuperacao_pct,
+                   ROUND((bg.recuperacao_m / (bg.ate_m - bg.de_m)) * 100, 1) as recuperacao_pct,
 
-                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
+                   bg.rqd_m, ROUND((bg.rqd_m / (bg.ate_m - bg.de_m)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
 
             FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
 
@@ -1145,6 +1161,8 @@ if not tela_login():
     st.stop()
 
 
+
+# Leitura segura dos dados de sessão
 
 perfil_atual = st.session_state.get("perfil", "")
 
@@ -1636,7 +1654,7 @@ elif opcao == "📝 Apontamento Diário":
 
         df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
 
-        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos", conn)
+        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
 
         df_prod_full = pd.read_sql_query(
 
@@ -1670,7 +1688,7 @@ elif opcao == "📝 Apontamento Diário":
 
         df_furos = pd.read_sql_query(
 
-            "SELECT id, sonda_id FROM furos WHERE sonda_id = ?",
+            "SELECT id FROM furos WHERE sonda_id = ?",
 
             conn,
 
@@ -1724,7 +1742,7 @@ elif opcao == "📝 Apontamento Diário":
 
     with tab_novo:
 
-        if not df_sondas.empty and not df_furos.empty:
+        if not df_sondas.empty:
 
             with st.container(border=True):
 
@@ -1734,17 +1752,5 @@ elif opcao == "📝 Apontamento Diário":
 
                     c1, c2, c3 = st.columns(3)
 
-                    data_reg = c1.date_input("Data do Avanço", value=date.today())
-
-                    
-
-                    sonda_sel = c2.selectbox(
-
-                        "Sonda",
-
-                        df_sondas["codigo"].tolist()
-
-                    )
-
-                    sonda_id_sel = df_sondas[df_sondas["codigo"] == sonda_sel]["id"].valu 
+                    data_reg = c1.da 
 
