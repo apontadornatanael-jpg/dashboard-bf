@@ -658,56 +658,85 @@ elif opcao == "Boletim Geológico":
 
     with tab_bg_novo:
         if not df_furos.empty:
+            lista_furos = df_furos["id"].tolist()
+            
+            # Seleção do furo fora do formulário para atualização em tempo real
+            furo_sel = st.selectbox("Selecione o Furo para Registro", lista_furos)
+
+            # Busca a última profundidade gravada (ate_m) para este furo
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(ate_m) FROM boletim_geologico WHERE furo_id = ?", (furo_sel,))
+            ultimo_ate = cursor.fetchone()[0]
+            conn.close()
+
+            de_auto = float(ultimo_ate) if ultimo_ate is not None else 0.0
+
+            # Entradas de profundidade fora da form para cálculo automático dinâmico do Avanço e Recuperação %
+            st.subheader("Intervalo e Métricas de Avanço")
+            col_de, col_ate, col_avanco = st.columns(3)
+            
+            de_m = col_de.number_input("De (m)", min_value=0.0, value=de_auto, step=0.1, key="de_m_input")
+            ate_m = col_ate.number_input("Até (m)", min_value=de_m, value=max(de_m, de_auto), step=0.1, key="ate_m_input")
+            
+            # Cálculo do Avanço Automático
+            avanco_m = round(ate_m - de_m, 2)
+            col_avanco.metric("Avanço Automático (m)", f"{avanco_m:.2f} m")
+
             with st.form("form_bg", clear_on_submit=True):
                 c1, c2, c3 = st.columns(3)
-                furo_sel = c1.selectbox("Furo", df_furos["id"].tolist())
-                de_m = c2.number_input("De (m)", min_value=0.0, step=0.1)
-                ate_m = c3.number_input("Até (m)", min_value=0.0, step=0.1)
+                rec_m = c1.number_input("Recuperação (m)", min_value=0.0, max_value=float(avanco_m) if avanco_m > 0 else 999.0, step=0.01)
+                
+                # Cálculo da Recuperação em %
+                rec_pct = (rec_m / avanco_m * 100) if avanco_m > 0 else 0.0
+                c2.text_input("Recuperação (%)", value=f"{rec_pct:.1f}%", disabled=True)
+                
+                rqd_m = c3.number_input("RQD (m)", min_value=0.0, max_value=float(avanco_m) if avanco_m > 0 else 999.0, step=0.01)
 
-                c4, c5, c6 = st.columns(3)
-                rec_m = c4.number_input("Recuperação (m)", min_value=0.0, step=0.01)
-                rqd_m = c5.number_input("RQD (m)", min_value=0.0, step=0.01)
-                litologia = c6.text_input("Litologia")
+                c4, c5 = st.columns(2)
+                litologia = c4.text_input("Litologia")
+                n_amostra = c5.text_input("Nº Amostra")
 
-                c7, c8 = st.columns(2)
-                n_amostra = c7.text_input("Nº Amostra")
-                foto = c8.file_uploader("Foto da Caixa de Testemunho", type=["jpg", "png", "jpeg"])
-
+                foto = st.file_uploader("Foto da Caixa de Testemunho", type=["jpg", "png", "jpeg"])
                 desc = st.text_area("Descrição Geológica")
                 obs = st.text_area("Observações")
 
                 if st.form_submit_button("Salvar Boletim", type="primary"):
-                    foto_url = upload_foto_supabase(foto, foto.name) if foto else ""
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        INSERT INTO boletim_geologico 
-                        (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (furo_sel, de_m, ate_m, rec_m, rqd_m, litologia, desc, n_amostra, obs, foto_url)
-                    )
-                    conn.commit()
-                    conn.close()
+                    if ate_m <= de_m and avanco_m == 0:
+                        st.error("A profundidade final 'Até (m)' deve ser maior que a profundidade inicial 'De (m)'.")
+                    else:
+                        foto_url = upload_foto_supabase(foto, foto.name) if foto else ""
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            INSERT INTO boletim_geologico 
+                            (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (furo_sel, de_m, ate_m, rec_m, rqd_m, litologia, desc, n_amostra, obs, foto_url)
+                        )
+                        conn.commit()
+                        conn.close()
 
-                    # Sincronização com o PostgreSQL (Supabase)
-                    salvar_boletim_supabase({
-                        "furo_id": furo_sel,
-                        "de_m": de_m,
-                        "ate_m": ate_m,
-                        "recuperacao_m": rec_m,
-                        "rqd_m": rqd_m,
-                        "litologia": litologia,
-                        "descricao_geologica": desc,
-                        "n_amostra": n_amostra,
-                        "observacoes": obs,
-                        "foto_url": foto_url
-                    })
+                        # Sincronização com o Supabase
+                        salvar_boletim_supabase({
+                            "furo_id": furo_sel,
+                            "de_m": de_m,
+                            "ate_m": ate_m,
+                            "recuperacao_m": rec_m,
+                            "rqd_m": rqd_m,
+                            "litologia": litologia,
+                            "descricao_geologica": desc,
+                            "n_amostra": n_amostra,
+                            "observacoes": obs,
+                            "foto_url": foto_url
+                        })
 
-                    st.success("Boletim Geológico salvo com sucesso!")
-                    st.rerun()
-
+                        st.success("Boletim Geológico salvo com sucesso!")
+                        st.rerun()
+        else:
+            st.warning("Nenhum furo cadastrado para registrar boletim.")
 # ------------------------------------------------------------------------------
 # 6. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN)
 # ------------------------------------------------------------------------------
