@@ -23,7 +23,33 @@ from ui_components import aplicar_estilo_customizado, render_kpi_card
 # INICIALIZAÇÃO DA APLICAÇÃO E SESSION STATE
 # ==============================================================================
 
-st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
+st.set_page_config(
+    page_title="Central de Controle - Sondagem",
+    page_icon=None,
+    layout="wide"
+)
+
+# Estilo CSS para ocultar elementos de marca, ícones nativos e menus do Streamlit
+hide_streamlit_style = """
+    <style>
+    /* Oculta o menu de três pontos do Streamlit */
+    #MainMenu {visibility: hidden;}
+    
+    /* Oculta o cabeçalho padrão e a barra superior */
+    header {visibility: hidden;}
+    .stApp > header {display: none;}
+    
+    /* Oculta o rodapé e o painel 'Manage app' */
+    footer {visibility: hidden;}
+    [data-testid="stStatusWidget"] {visibility: hidden;}
+    [data-testid="stDecoration"] {display: none;}
+    
+    /* Oculta ícones SVG internos de menus/navegação do Streamlit */
+    [data-testid="stSidebarNav"] svg {display: none;}
+    button[title="View fullscreen"] {display: none;}
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
 if "autenticado" not in st.session_state:
     st.session_state["autenticado"] = False
@@ -189,7 +215,7 @@ def tela_login():
     if not st.session_state.get("autenticado", False):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.subheader("🔐 Acesso ao Sistema")
+            st.subheader("Acesso ao Sistema")
             usuario = st.text_input("Usuário")
             senha = st.text_input("Senha", type="password")
 
@@ -210,7 +236,7 @@ def tela_login():
 
 def botao_logout():
     st.sidebar.markdown(
-        f"👤 **{st.session_state.get('usuario', '')}** ({st.session_state.get('perfil', '')})"
+        f"**{st.session_state.get('usuario', '')}** ({st.session_state.get('perfil', '')})"
     )
     if st.sidebar.button("Sair / Logout"):
         st.session_state["autenticado"] = False
@@ -280,7 +306,7 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
     conn.close()
 
     ws_dash = wb.active
-    ws_dash.title = "📌 Dashboard Executivo"
+    ws_dash.title = "Dashboard Executivo"
     ws_dash.views.sheetView[0].showGridLines = True
     ws_dash.merge_cells("A1:H1")
     ws_dash["A1"] = "DASHBOARD EXECUTIVO — CONTROLE INTEGRADO DE SONDAGEM"
@@ -337,27 +363,26 @@ sonda_id_atual = st.session_state.get("sonda_id", None)
 # SIDEBAR E NAVEGAÇÃO POR PERFIL
 # ==============================================================================
 
-st.sidebar.title("🛠️ CENTRAL DE CONTROLE")
+st.sidebar.title("CENTRAL DE CONTROLE")
 botao_logout()
 st.sidebar.markdown("---")
 
 # Definição das opções permitidas baseadas no tipo de usuário
 if perfil_atual == "Admin":
     opcoes_menu = [
-        "📊 Dashboard Geral",
-        "🚜 Cadastro de Sondas",
-        "📝 Apontamento Diário",
-        "📍 Controle de Furos",
-        "⛏️ Boletim Geológico",
-        "👥 Gestão de Usuários",
+        "Dashboard Geral",
+        "Cadastro de Sondas",
+        "Apontamento Diário",
+        "Controle de Furos",
+        "Boletim Geológico",
+        "Gestão de Usuários",
     ]
 else:
-    # Usuários comuns acessam exatamente os 4 tópicos solicitados
     opcoes_menu = [
-        "📊 Dashboard Geral",
-        "📝 Apontamento Diário",
-        "📍 Controle de Furos",
-        "⛏️ Boletim Geológico",
+        "Dashboard Geral",
+        "Apontamento Diário",
+        "Controle de Furos",
+        "Boletim Geológico",
     ]
 
 opcao = st.sidebar.radio("Navegação", opcoes_menu)
@@ -365,7 +390,7 @@ opcao = st.sidebar.radio("Navegação", opcoes_menu)
 excel_mestre = gerar_dashboard_excel_completo(perfil_atual, sonda_id_atual)
 st.sidebar.markdown("---")
 st.sidebar.download_button(
-    label="📊 Exportar Relatório",
+    label="Exportar Relatório",
     data=excel_mestre,
     file_name=f"Relatorio_Sondagem_{date.today()}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -376,8 +401,8 @@ st.sidebar.download_button(
 # ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL
 # ------------------------------------------------------------------------------
-if opcao == "📊 Dashboard Geral":
-    st.title("📊 Painel Geral de Operações")
+if opcao == "Dashboard Geral":
+    st.title("Painel Geral de Operações")
     st.markdown("---")
 
     conn = get_connection()
@@ -411,12 +436,10 @@ if opcao == "📊 Dashboard Geral":
     st.subheader("Status dos Equipamentos")
     if not df_sondas.empty:
         cols = st.columns(min(max(sondas_total, 1), 4))
-        status_emojis = {"Operando": "🟢", "Parada": "🟡", "Manutenção": "🔴"}
         for i, (_, sonda) in enumerate(df_sondas.iterrows()):
             with cols[i % 4]:
                 with st.container(border=True):
-                    emoji = status_emojis.get(sonda["status"], "⚪")
-                    st.markdown(f"### {emoji} {sonda['codigo']}")
+                    st.markdown(f"### {sonda['codigo']}")
                     st.write(f"**Equipe:** {sonda['equipe']}")
                     st.write(f"**Projeto:** {sonda['projeto']}")
                     st.write(f"**Status:** {sonda['status']}")
@@ -426,15 +449,15 @@ if opcao == "📊 Dashboard Geral":
 # ------------------------------------------------------------------------------
 # 2. GESTÃO DE SONDAS (EXCLUSIVO ADMIN)
 # ------------------------------------------------------------------------------
-elif opcao == "🚜 Cadastro de Sondas" and perfil_atual == "Admin":
-    st.title("🚜 Gestão Central de Sondas")
+elif opcao == "Cadastro de Sondas" and perfil_atual == "Admin":
+    st.title("Gestão Central de Sondas")
     st.markdown("---")
 
     conn = get_connection()
     df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
     conn.close()
 
-    tab_lista, tab_novo = st.tabs(["📋 Sondas Cadastradas", "➕ Nova Sonda"])
+    tab_lista, tab_novo = st.tabs(["Sondas Cadastradas", "Nova Sonda"])
 
     with tab_lista:
         if not df_sondas.empty:
@@ -465,8 +488,8 @@ elif opcao == "🚜 Cadastro de Sondas" and perfil_atual == "Admin":
 # ------------------------------------------------------------------------------
 # 3. APONTAMENTO DIÁRIO
 # ------------------------------------------------------------------------------
-elif opcao == "📝 Apontamento Diário":
-    st.title("📝 Apontamento Diário de Produção")
+elif opcao == "Apontamento Diário":
+    st.title("Apontamento Diário de Produção")
     st.markdown("---")
 
     conn = get_connection()
@@ -480,7 +503,7 @@ elif opcao == "📝 Apontamento Diário":
         df_prod = pd.read_sql_query("SELECT p.id, p.data, s.codigo as sonda, p.furo_id, p.prof_inicial, p.prof_final, (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ? ORDER BY p.data DESC", conn, params=(sonda_id_atual,))
     conn.close()
 
-    tab_hist, tab_novo = st.tabs(["📋 Histórico", "➕ Registrar Apontamento"])
+    tab_hist, tab_novo = st.tabs(["Histórico", "Registrar Apontamento"])
 
     with tab_hist:
         if not df_prod.empty:
@@ -523,8 +546,8 @@ elif opcao == "📝 Apontamento Diário":
 # ------------------------------------------------------------------------------
 # 4. CONTROLE DE FUROS
 # ------------------------------------------------------------------------------
-elif opcao == "📍 Controle de Furos":
-    st.title("📍 Controle de Furos de Sondagem")
+elif opcao == "Controle de Furos":
+    st.title("Controle de Furos de Sondagem")
     st.markdown("---")
 
     conn = get_connection()
@@ -536,7 +559,7 @@ elif opcao == "📍 Controle de Furos":
         df_furos = pd.read_sql_query("SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id WHERE f.sonda_id = ?", conn, params=(sonda_id_atual,))
     conn.close()
 
-    tab_furos_list, tab_furos_novo = st.tabs(["📋 Furos Cadastrados", "➕ Novo Furo"])
+    tab_furos_list, tab_furos_novo = st.tabs(["Furos Cadastrados", "Novo Furo"])
 
     with tab_furos_list:
         if not df_furos.empty:
@@ -580,8 +603,8 @@ elif opcao == "📍 Controle de Furos":
 # ------------------------------------------------------------------------------
 # 5. BOLETIM GEOLÓGICO
 # ------------------------------------------------------------------------------
-elif opcao == "⛏️ Boletim Geológico":
-    st.title("⛏️ Boletim Geológico de Campo")
+elif opcao == "Boletim Geológico":
+    st.title("Boletim Geológico de Campo")
     st.markdown("---")
 
     conn = get_connection()
@@ -593,7 +616,7 @@ elif opcao == "⛏️ Boletim Geológico":
         df_geo = pd.read_sql_query("SELECT bg.* FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC", conn, params=(sonda_id_atual,))
     conn.close()
 
-    tab_bg_hist, tab_bg_novo = st.tabs(["📋 Registros Geológicos", "➕ Registrar Intervalo"])
+    tab_bg_hist, tab_bg_novo = st.tabs(["Registros Geológicos", "Registrar Intervalo"])
 
     with tab_bg_hist:
         if not df_geo.empty:
@@ -656,8 +679,8 @@ elif opcao == "⛏️ Boletim Geológico":
 # ------------------------------------------------------------------------------
 # 6. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN)
 # ------------------------------------------------------------------------------
-elif opcao == "👥 Gestão de Usuários" and perfil_atual == "Admin":
-    st.title("👥 Vinculação de Usuários e Sondas")
+elif opcao == "Gestão de Usuários" and perfil_atual == "Admin":
+    st.title("Vinculação de Usuários e Sondas")
     st.markdown("---")
 
     conn = get_connection()
