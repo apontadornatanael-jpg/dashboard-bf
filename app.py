@@ -7,7 +7,6 @@ import openpyxl
 import pandas as pd
 import streamlit as st
 from openpyxl.chart import BarChart, Reference
-from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -40,10 +39,10 @@ def add_bg_from_local(image_file):
 
 st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
 
-# APLICA O PLANO DE FUNDO (Certifique-se de que a imagem 'logo_empresa.png' está salva no GitHub)
+# PLANO DE FUNDO
 add_bg_from_local("logo_empresa.png")
 
-# 1. APLICAÇÃO DE ESTILOS E AUTENTICAÇÃO
+# ESTILOS E AUTENTICAÇÃO
 aplicar_estilo_customizado()
 
 if not tela_login():
@@ -118,7 +117,6 @@ def init_db():
   conn.close()
 
 
-# GARANTE QUE AS TABELAS EXISTAM ANTES DE CONSULTAR NO EXCEL
 init_db()
 
 
@@ -403,7 +401,7 @@ def gerar_dashboard_excel_completo():
   return output
 
 
-# NAVEGAÇÃO STREAMLIT & INFOS DE SESSÃO
+# NAVEGAÇÃO STREAMLIT & SIDEBAR
 st.sidebar.title("🛠️ CENTRAL DE CONTROLE")
 botao_logout()
 st.sidebar.markdown("---")
@@ -422,16 +420,18 @@ opcao = st.sidebar.radio(
 excel_mestre = gerar_dashboard_excel_completo()
 st.sidebar.markdown("---")
 st.sidebar.download_button(
-    label="📊 Exportar Planilha Dashboard Mestra",
+    label="📊 Exportar Planilha Mestra",
     data=excel_mestre,
     file_name=f"Dashboard_Geral_Sondagem_{date.today()}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     type="primary",
+    use_container_width=True,
 )
 
-# DASHBOARD GERAL
+# 1. DASHBOARD GERAL
 if opcao == "📊 Dashboard Geral":
-  st.title("CENTRAL DE CONTROLE — SONDAGEM")
+  st.title("📊 Painel Geral de Operações")
+  st.caption("Visão macro da produção e disponibilidadede equipamentos.")
   st.markdown("---")
 
   conn = get_connection()
@@ -467,20 +467,20 @@ if opcao == "📊 Dashboard Geral":
 
   media_por_sonda = metros_hoje / sondas_op if sondas_op > 0 else 0
 
-  col1, col2, col3, col4, col5 = st.columns(5)
-  with col1:
+  c1, c2, c3, c4, c5 = st.columns(5)
+  with c1:
     render_kpi_card("Sondas Operando", f"{sondas_op}/{sondas_total}")
-  with col2:
+  with c2:
     render_kpi_card("Produção Hoje", f"{metros_hoje:.1f} m")
-  with col3:
-    render_kpi_card("Produção Acumulada", f"{metros_acumulados:.1f} m")
-  with col4:
+  with c3:
+    render_kpi_card("Total Acumulado", f"{metros_acumulados:.1f} m")
+  with c4:
     render_kpi_card("Média / Sonda", f"{media_por_sonda:.1f} m")
-  with col5:
+  with c5:
     render_kpi_card("Eficiência", f"{eficiencia:.0f}%")
 
   st.markdown("---")
-  st.subheader("Status das Sondas")
+  st.subheader("Status das Sondas em Campo")
 
   if not df_sondas.empty:
     cols = st.columns(min(max(sondas_total, 1), 4))
@@ -488,115 +488,133 @@ if opcao == "📊 Dashboard Geral":
 
     for i, (_, sonda) in enumerate(df_sondas.iterrows()):
       with cols[i % 4]:
-        emoji = status_emojis.get(sonda["status"], "⚪")
-        st.markdown(f"### {emoji} {sonda['codigo']}")
-        st.write(f"**Equipe:** {sonda['equipe']}")
-        st.write(f"**Projeto:** {sonda['projeto']}")
-        st.write(f"**Status:** {sonda['status']}")
-        st.write("---")
+        with st.container(border=True):
+          emoji = status_emojis.get(sonda["status"], "⚪")
+          st.markdown(f"### {emoji} {sonda['codigo']}")
+          st.write(f"**Equipe:** {sonda['equipe']}")
+          st.write(f"**Projeto:** {sonda['projeto']}")
+          st.write(f"**Status:** {sonda['status']}")
   else:
-    st.info(
-        "Nenhuma sonda cadastrada no momento. Acesse 'Cadastro de Sondas' para"
-        " iniciar."
-    )
+    st.info("Nenhuma sonda cadastrada no sistema.")
 
-# CADASTRO DE SONDAS
+# 2. CADASTRO DE SONDAS
 elif opcao == "🚜 Cadastro de Sondas":
-  st.title("Cadastro e Gestão de Sondas")
+  st.title("🚜 Gestão de Sondas")
+  st.caption("Controle e atualização do parque de equipamentos.")
   st.markdown("---")
 
   conn = get_connection()
   df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
   conn.close()
 
-  st.subheader("Sondas Cadastradas")
-  st.dataframe(df_sondas, use_container_width=True)
+  tab_lista, tab_novo, tab_editar = st.tabs(
+      ["📋 Sondas Cadastradas", "➕ Nova Sonda", "✏️ Editar Sonda"]
+  )
 
-  col_cad, col_edit = st.columns(2)
-
-  with col_cad:
-    with st.form("form_sonda", clear_on_submit=True):
-      st.subheader("➕ Nova Sonda")
-      codigo = st.text_input("Identificação (ex: Sonda 01, SD-01)")
-      equipe = st.text_input("Equipe Responsável")
-      projeto = st.text_input("Frente / Projeto")
-      status = st.selectbox(
-          "Status Atual", ["Operando", "Parada", "Manutenção"]
-      )
-      btn_salvar = st.form_submit_button("Cadastrar Sonda")
-
-      if btn_salvar and codigo and equipe and projeto:
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-          cursor.execute(
-              "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?,"
-              " ?, ?, ?)",
-              (codigo, equipe, projeto, status),
-          )
-          conn.commit()
-          st.success(f"Sonda '{codigo}' cadastrada!")
-          st.rerun()
-        except sqlite3.IntegrityError:
-          st.error("Esta identificação já existe.")
-        finally:
-          conn.close()
-
-  with col_edit:
+  with tab_lista:
     if not df_sondas.empty:
-      with st.form("form_edit_sonda"):
-        st.subheader("✏️ Renomear / Editar Sonda")
-        sonda_para_editar = st.selectbox(
-            "Selecione a Sonda", df_sondas["codigo"].tolist()
-        )
-        dados_sonda = df_sondas[
-            df_sondas["codigo"] == sonda_para_editar
-        ].iloc[0]
+      st.dataframe(df_sondas, use_container_width=True, hide_index=True)
+    else:
+      st.info("Nenhuma sonda cadastrada.")
 
-        novo_codigo = st.text_input(
-            "Novo Nome / Código Oficial", value=dados_sonda["codigo"]
-        )
-        nova_equipe = st.text_input("Equipe", value=dados_sonda["equipe"])
-        novo_projeto = st.text_input("Projeto", value=dados_sonda["projeto"])
-        novo_status = st.selectbox(
-            "Status",
-            ["Operando", "Parada", "Manutenção"],
-            index=["Operando", "Parada", "Manutenção"].index(
-                dados_sonda["status"]
-            ),
+  with tab_novo:
+    with st.container(border=True):
+      with st.form("form_sonda", clear_on_submit=True):
+        st.subheader("Cadastrar Nova Sonda")
+        c1, c2 = st.columns(2)
+        codigo = c1.text_input("Identificação (ex: SD-01)")
+        equipe = c2.text_input("Equipe Responsável")
+
+        c3, c4 = st.columns(2)
+        projeto = c3.text_input("Frente / Projeto")
+        status = c4.selectbox(
+            "Status Atual", ["Operando", "Parada", "Manutenção"]
         )
 
-        btn_atualizar = st.form_submit_button("Atualizar Cadastro")
+        btn_salvar = st.form_submit_button(
+            "Cadastrar Sonda", type="primary", use_container_width=True
+        )
 
-        if btn_atualizar:
+        if btn_salvar and codigo and equipe and projeto:
           conn = get_connection()
           cursor = conn.cursor()
           try:
             cursor.execute(
-                "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?, status"
-                " = ? WHERE id = ?",
-                (
-                    novo_codigo,
-                    nova_equipe,
-                    novo_projeto,
-                    novo_status,
-                    int(dados_sonda["id"]),
-                ),
+                "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES"
+                " (?, ?, ?, ?)",
+                (codigo, equipe, projeto, status),
             )
             conn.commit()
-            st.success(f"Sonda atualizada para '{novo_codigo}'!")
+            st.success(f"Sonda '{codigo}' cadastrada!")
             st.rerun()
           except sqlite3.IntegrityError:
-            st.error("O novo código já pertence a outra sonda.")
+            st.error("Esta identificação já existe.")
           finally:
             conn.close()
+
+  with tab_editar:
+    if not df_sondas.empty:
+      with st.container(border=True):
+        with st.form("form_edit_sonda"):
+          st.subheader("Editar Dados da Sonda")
+          sonda_para_editar = st.selectbox(
+              "Selecione a Sonda", df_sondas["codigo"].tolist()
+          )
+          dados_sonda = df_sondas[
+              df_sondas["codigo"] == sonda_para_editar
+          ].iloc[0]
+
+          c1, c2 = st.columns(2)
+          novo_codigo = c1.text_input(
+              "Código Oficial", value=dados_sonda["codigo"]
+          )
+          nova_equipe = c2.text_input("Equipe", value=dados_sonda["equipe"])
+
+          c3, c4 = st.columns(2)
+          novo_projeto = c3.text_input("Projeto", value=dados_sonda["projeto"])
+          novo_status = c4.selectbox(
+              "Status",
+              ["Operando", "Parada", "Manutenção"],
+              index=["Operando", "Parada", "Manutenção"].index(
+                  dados_sonda["status"]
+              ),
+          )
+
+          btn_atualizar = st.form_submit_button(
+              "Atualizar Cadastro", type="primary", use_container_width=True
+          )
+
+          if btn_atualizar:
+            conn = get_connection()
+            cursor = conn.cursor()
+            try:
+              cursor.execute(
+                  "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?,"
+                  " status = ? WHERE id = ?",
+                  (
+                      novo_codigo,
+                      nova_equipe,
+                      novo_projeto,
+                      novo_status,
+                      int(dados_sonda["id"]),
+                  ),
+              )
+              conn.commit()
+              st.success(f"Sonda atualizada para '{novo_codigo}'!")
+              st.rerun()
+            except sqlite3.IntegrityError:
+              st.error("O novo código já pertence a outra sonda.")
+            finally:
+              conn.close()
     else:
       st.info("Cadastre uma sonda para habilitar a edição.")
 
-# APONTAMENTO DIÁRIO
+# 3. APONTAMENTO DIÁRIO
 elif opcao == "📝 Apontamento Diário":
-  st.title("Apontamento Diário de Produção")
+  st.title("📝 Apontamento Diário de Produção")
+  st.caption("Registro de avanço físico e tempos de paralisação.")
   st.markdown("---")
+
   conn = get_connection()
   df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
   df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
@@ -612,200 +630,237 @@ elif opcao == "📝 Apontamento Diário":
   )
   conn.close()
 
-  st.subheader("Histórico de Apontamentos")
-  st.dataframe(df_prod_full, use_container_width=True)
+  tab_historico, tab_novo, tab_excluir = st.tabs(
+      ["📋 Histórico", "➕ Novo Apontamento", "🗑️ Excluir Registro"]
+  )
 
-  if not df_prod_full.empty:
-    with st.expander("🗑️ Excluir Apontamento Incorreto"):
-      opcoes_prod_excluir = df_prod_full.apply(
-          lambda r: (
-              f"ID {r['id']} | Data: {r['data']} | Sonda: {r['sonda_codigo']} |"
-              f" Furo: {r['furo_id']} ({r['prof_inicial']}m -"
-              f" {r['prof_final']}m)"
-          ),
-          axis=1,
-      ).tolist()
+  with tab_historico:
+    if not df_prod_full.empty:
+      st.dataframe(df_prod_full, use_container_width=True, hide_index=True)
+    else:
+      st.info("Nenhum apontamento registrado.")
 
-      apontamento_sel = st.selectbox(
-          "Selecione o apontamento que deseja remover:", opcoes_prod_excluir
-      )
+  with tab_novo:
+    if not df_sondas.empty:
+      with st.container(border=True):
+        with st.form("form_producao", clear_on_submit=True):
+          st.subheader("Registrar Avanço Diário")
+          c1, c2, c3 = st.columns(3)
+          data_reg = c1.date_input("Data", date.today())
+          sonda_sel = c2.selectbox("Sonda", df_sondas["codigo"].tolist())
+          lista_furos = (
+              df_furos["id"].tolist()
+              if not df_furos.empty
+              else ["Sem Furo Cadastrado"]
+          )
+          furo_sel = c3.selectbox("Furo", lista_furos)
 
-      if st.button("❌ Excluir Apontamento Selecionado", type="secondary"):
-        id_prod_excluir = int(apontamento_sel.split(" ")[1])
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM producao_diaria WHERE id = ?", (id_prod_excluir,)
-        )
-        conn.commit()
-        conn.close()
-        st.success("Apontamento removido com sucesso!")
-        st.rerun()
+          c4, c5 = st.columns(2)
+          prof_in = c4.number_input(
+              "Profundidade Inicial (m)", min_value=0.0, step=0.1
+          )
+          prof_fim = c5.number_input(
+              "Profundidade Final (m)", min_value=0.0, step=0.1
+          )
 
-  st.markdown("---")
-  st.subheader("➕ Novo Apontamento")
+          c6, c7 = st.columns(2)
+          hrs_trab = c6.number_input(
+              "Horas Trabalhadas",
+              min_value=0.0,
+              max_value=24.0,
+              value=8.0,
+              step=0.5,
+          )
+          hrs_par = c7.number_input(
+              "Horas Paradas",
+              min_value=0.0,
+              max_value=24.0,
+              value=0.0,
+              step=0.5,
+          )
+          motivo_parada = st.text_input("Motivo da Parada")
 
-  if not df_sondas.empty:
-    with st.form("form_producao", clear_on_submit=True):
-      col_a, col_b, col_c = st.columns(3)
-      data_reg = col_a.date_input("Data", date.today())
-      sonda_sel = col_b.selectbox("Sonda", df_sondas["codigo"].tolist())
-      lista_furos = (
-          df_furos["id"].tolist()
-          if not df_furos.empty
-          else ["Sem Furo Cadastrado"]
-      )
-      furo_sel = col_c.selectbox("Furo", lista_furos)
+          btn_reg = st.form_submit_button(
+              "Lançar Produção", type="primary", use_container_width=True
+          )
 
-      col_d, col_e = st.columns(2)
-      prof_in = col_d.number_input(
-          "Profundidade Inicial (m)", min_value=0.0, step=0.1
-      )
-      prof_fim = col_e.number_input(
-          "Profundidade Final (m)", min_value=0.0, step=0.1
-      )
-
-      col_f, col_g = st.columns(2)
-      hrs_trab = col_f.number_input(
-          "Horas Trabalhadas",
-          min_value=0.0,
-          max_value=24.0,
-          value=8.0,
-          step=0.5,
-      )
-      hrs_par = col_g.number_input(
-          "Horas Paradas", min_value=0.0, max_value=24.0, value=0.0, step=0.5
-      )
-      motivo_parada = st.text_input("Motivo da Parada")
-
-      btn_reg = st.form_submit_button("Lançar Produção")
-
-      if btn_reg and prof_fim >= prof_in:
-        sonda_id = int(
-            df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
-        )
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
+          if btn_reg and prof_fim >= prof_in:
+            sonda_id = int(
+                df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
+            )
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
                     INSERT INTO producao_diaria (data, sonda_id, furo_id, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-            (
-                str(data_reg),
-                sonda_id,
-                furo_sel,
-                prof_in,
-                prof_fim,
-                hrs_trab,
-                hrs_par,
-                motivo_parada,
-            ),
-        )
-        conn.commit()
-        conn.close()
-        st.success("Apontamento registrado!")
-        st.rerun()
-  else:
-    st.warning("Cadastre ao menos uma sonda para realizar apontamentos.")
+                (
+                    str(data_reg),
+                    sonda_id,
+                    furo_sel,
+                    prof_in,
+                    prof_fim,
+                    hrs_trab,
+                    hrs_par,
+                    motivo_parada,
+                ),
+            )
+            conn.commit()
+            conn.close()
+            st.success("Apontamento registrado com sucesso!")
+            st.rerun()
+    else:
+      st.warning("Cadastre ao menos uma sonda para realizar apontamentos.")
 
-# CONTROLE DE FUROS
+  with tab_excluir:
+    if not df_prod_full.empty:
+      with st.container(border=True):
+        st.subheader("Remover Apontamento")
+        opcoes_prod_excluir = df_prod_full.apply(
+            lambda r: (
+                f"ID {r['id']} | Data: {r['data']} | Sonda: {r['sonda_codigo']}"
+                f" | Furo: {r['furo_id']} ({r['prof_inicial']}m -"
+                f" {r['prof_final']}m)"
+            ),
+            axis=1,
+        ).tolist()
+
+        apontamento_sel = st.selectbox(
+            "Selecione o registro para remoção:", opcoes_prod_excluir
+        )
+
+        if st.button(
+            "❌ Confirmar Exclusão", type="secondary", use_container_width=True
+        ):
+          id_prod_excluir = int(apontamento_sel.split(" ")[1])
+          conn = get_connection()
+          cursor = conn.cursor()
+          cursor.execute(
+              "DELETE FROM producao_diaria WHERE id = ?", (id_prod_excluir,)
+          )
+          conn.commit()
+          conn.close()
+          st.success("Apontamento removido com sucesso!")
+          st.rerun()
+
+# 4. CONTROLE DE FUROS
 elif opcao == "📍 Controle de Furos":
-  st.title("Controle de Furos de Sondagem")
+  st.title("📍 Controle de Furos de Sondagem")
+  st.caption("Planejamento e dados geográficos de cada perfuração.")
   st.markdown("---")
+
   conn = get_connection()
   df_furos_full = pd.read_sql_query("SELECT * FROM furos", conn)
   df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
   conn.close()
 
-  st.dataframe(df_furos_full, use_container_width=True)
+  tab_lista, tab_novo, tab_excluir = st.tabs(
+      ["📋 Furos Cadastrados", "➕ Novo Furo", "🗑️ Excluir Furo"]
+  )
 
-  if not df_furos_full.empty:
-    with st.expander("🗑️ Excluir Furo Cadastrado"):
-      furo_para_excluir = st.selectbox(
-          "Selecione o Furo que deseja remover:", df_furos_full["id"].tolist()
-      )
-      st.warning(
-          "⚠️ Atenção: Ao excluir um furo, todos os apontamentos e boletins"
-          " geológicos associados serão removidos."
-      )
+  with tab_lista:
+    if not df_furos_full.empty:
+      st.dataframe(df_furos_full, use_container_width=True, hide_index=True)
+    else:
+      st.info("Nenhum furo cadastrado.")
 
-      if st.button("❌ Confirmar Exclusão do Furo", type="secondary"):
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM boletim_geologico WHERE furo_id = ?",
-            (furo_para_excluir,),
-        )
-        cursor.execute(
-            "DELETE FROM producao_diaria WHERE furo_id = ?",
-            (furo_para_excluir,),
-        )
-        cursor.execute("DELETE FROM furos WHERE id = ?", (furo_para_excluir,))
-        conn.commit()
-        conn.close()
-        st.success(f"Furo {furo_para_excluir} removido!")
-        st.rerun()
+  with tab_novo:
+    if not df_sondas.empty:
+      with st.container(border=True):
+        with st.form("form_furo", clear_on_submit=True):
+          st.subheader("Cadastrar Novo Furo")
+          c1, c2, c3 = st.columns(3)
+          id_furo = c1.text_input("ID do Furo (ex: F-01)")
+          sonda_furo = c2.selectbox("Sonda Alocada", df_sondas["codigo"].tolist())
+          prof_plan = c3.number_input(
+              "Profundidade Planejada (m)", min_value=1.0, step=5.0
+          )
 
-  st.markdown("---")
-  st.subheader("➕ Novo Furo")
+          c4, c5, c6 = st.columns(3)
+          coord_e = c4.number_input("Coordenada East (E)", value=0.0)
+          coord_n = c5.number_input("Coordenada North (N)", value=0.0)
+          cota = c6.number_input("Cota (Z)", value=0.0)
 
-  if not df_sondas.empty:
-    with st.form("form_furo", clear_on_submit=True):
-      col1, col2, col3 = st.columns(3)
-      id_furo = col1.text_input("ID do Furo (ex: F-01)")
-      sonda_furo = col2.selectbox("Sonda Alocada", df_sondas["codigo"].tolist())
-      prof_plan = col3.number_input(
-          "Profundidade Planejada (m)", min_value=1.0, step=5.0
-      )
+          btn_furo = st.form_submit_button(
+              "Cadastrar Furo", type="primary", use_container_width=True
+          )
 
-      col4, col5, col6 = st.columns(3)
-      coord_e = col4.number_input("Coordenada East (E)", value=0.0)
-      coord_n = col5.number_input("Coordenada North (N)", value=0.0)
-      cota = col6.number_input("Cota (Z)", value=0.0)
-
-      btn_furo = st.form_submit_button("Cadastrar Furo")
-
-      if btn_furo and id_furo and sonda_furo:
-        sonda_id = int(
-            df_sondas[df_sondas["codigo"] == sonda_furo]["id"].values[0]
-        )
-        conn = get_connection()
-        cursor = conn.cursor()
-        try:
-          cursor.execute(
-              """
+          if btn_furo and id_furo and sonda_furo:
+            sonda_id = int(
+                df_sondas[df_sondas["codigo"] == sonda_furo]["id"].values[0]
+            )
+            conn = get_connection()
+            cursor = conn.cursor()
+            try:
+              cursor.execute(
+                  """
                         INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada)
                         VALUES (?, ?, ?, ?, ?, ?)
                     """,
-              (id_furo, sonda_id, coord_e, coord_n, cota, prof_plan),
+                  (id_furo, sonda_id, coord_e, coord_n, cota, prof_plan),
+              )
+              conn.commit()
+              st.success(f"Furo {id_furo} cadastrado!")
+              st.rerun()
+            except sqlite3.IntegrityError:
+              st.error("ID de furo já existe.")
+            finally:
+              conn.close()
+    else:
+      st.warning("Cadastre ao menos uma sonda para alocar furos.")
+
+  with tab_excluir:
+    if not df_furos_full.empty:
+      with st.container(border=True):
+        st.subheader("Excluir Furo do Sistema")
+        furo_para_excluir = st.selectbox(
+            "Selecione o Furo:", df_furos_full["id"].tolist()
+        )
+        st.warning(
+            "⚠️ Ação Irreversível: Ao excluir o furo, todos os apontamentos e"
+            " boletins associados serão removidos."
+        )
+
+        if st.button(
+            "❌ Confirmar Exclusão do Furo",
+            type="secondary",
+            use_container_width=True,
+        ):
+          conn = get_connection()
+          cursor = conn.cursor()
+          cursor.execute(
+              "DELETE FROM boletim_geologico WHERE furo_id = ?",
+              (furo_para_excluir,),
+          )
+          cursor.execute(
+              "DELETE FROM producao_diaria WHERE furo_id = ?",
+              (furo_para_excluir,),
+          )
+          cursor.execute(
+              "DELETE FROM furos WHERE id = ?", (furo_para_excluir,)
           )
           conn.commit()
-          st.success(f"Furo {id_furo} cadastrado!")
-          st.rerun()
-        except sqlite3.IntegrityError:
-          st.error("ID de furo já existe.")
-        finally:
           conn.close()
-  else:
-    st.warning("Cadastre ao menos uma sonda para alocar furos.")
+          st.success(f"Furo {furo_para_excluir} removido!")
+          st.rerun()
 
-# BOLETIM GEOLÓGICO
+# 5. BOLETIM GEOLÓGICO
 elif opcao == "⛏️ Boletim Geológico":
-  st.title("Boletim Geológico de Sondagem")
+  st.title("⛏️ Boletim Geológico de Sondagem")
+  st.caption("Descrição litológica, recuperação de testemunho e cálculo RQD.")
   st.markdown("---")
 
   conn = get_connection()
   df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
 
   if df_furos.empty:
-    st.warning(
-        "Cadastre um furo em 'Controle de Furos' antes de registrar dados"
-        " geológicos."
-    )
+    st.warning("Cadastre um furo antes de acessar o boletim geológico.")
     conn.close()
   else:
-    furo_selecionado = st.selectbox("Selecione o Furo", df_furos["id"].tolist())
+    furo_selecionado = st.selectbox(
+        "Selecione o Furo em Operação", df_furos["id"].tolist()
+    )
 
     df_geo = pd.read_sql_query(
         """
@@ -825,108 +880,128 @@ elif opcao == "⛏️ Boletim Geológico":
     )
     conn.close()
 
-    st.subheader(f"Perfil Geológico do Furo: {furo_selecionado}")
-    st.dataframe(df_geo, use_container_width=True)
+    tab_perfil, tab_novo, tab_excluir = st.tabs(
+        ["📋 Perfil Registrado", "➕ Novo Intervalo", "🗑️ Excluir Intervalo"]
+    )
 
-    if not df_geo.empty:
-      with st.expander("🗑️ Excluir ou Corrigir Registro de Intervalo"):
-        opcoes_excluir = df_geo.apply(
-            lambda r: (
-                f"ID {r['id']} | {r['de_m']}m - {r['ate_m']}m ({r['litologia']})"
-            ),
-            axis=1,
-        ).tolist()
-
-        item_selecionado = st.selectbox(
-            "Selecione o intervalo que deseja remover:", opcoes_excluir
+    with tab_perfil:
+      if not df_geo.empty:
+        st.dataframe(df_geo, use_container_width=True, hide_index=True)
+      else:
+        st.info(
+            f"Nenhum registro geológico para o furo {furo_selecionado}."
         )
 
-        if st.button("❌ Excluir Intervalo Selecionado", type="secondary"):
-          id_para_excluir = int(item_selecionado.split(" ")[1])
-          conn = get_connection()
-          cursor = conn.cursor()
-          cursor.execute(
-              "DELETE FROM boletim_geologico WHERE id = ?", (id_para_excluir,)
-          )
-          conn.commit()
-          conn.close()
-          st.success("Intervalo removido!")
-          st.rerun()
+    with tab_novo:
+      with st.container(border=True):
+        st.subheader("Registrar Intervalo Litológico")
+        c1, c2, c3 = st.columns(3)
+        de_m = c1.number_input("De (m)", min_value=0.0, value=0.0, step=0.5)
+        ate_m = c2.number_input("Até (m)", min_value=0.0, value=2.0, step=0.5)
+        litologia = c3.selectbox(
+            "Litologia Dominante",
+            [
+                "Solo de Alteração",
+                "Basalto Alterado",
+                "Basalto Sano",
+                "Gnaisse",
+                "Quartzito",
+                "Filito",
+                "Itabirito",
+                "Outros",
+            ],
+        )
 
-    st.markdown("---")
-    st.subheader("➕ Novo Intervalo Geológico")
+        c4, c5 = st.columns(2)
+        rec_m = c4.number_input(
+            "Recuperação Obtida (m)", min_value=0.0, value=1.8, step=0.1
+        )
+        rqd_m = c5.number_input(
+            "Comprimento RQD > 10cm (m)", min_value=0.0, value=1.2, step=0.1
+        )
 
-    col_g1, col_g2, col_g3 = st.columns(3)
-    de_m = col_g1.number_input("De (m)", min_value=0.0, value=0.0, step=0.5)
-    ate_m = col_g2.number_input("Até (m)", min_value=0.0, value=2.0, step=0.5)
-    litologia = col_g3.selectbox(
-        "Litologia",
-        [
-            "Solo de Alteração",
-            "Basalto Alterado",
-            "Basalto Sano",
-            "Gnaisse",
-            "Quartzito",
-            "Filito",
-            "Itabirito",
-            "Outros",
-        ],
-    )
+        avanco = ate_m - de_m
+        rec_pct = (rec_m / avanco * 100) if avanco > 0 else 0.0
+        rqd_pct = (rqd_m / avanco * 100) if avanco > 0 else 0.0
 
-    col_g4, col_g5 = st.columns(2)
-    rec_m = col_g4.number_input(
-        "Recuperação obtida (m)", min_value=0.0, value=1.8, step=0.1
-    )
-    rqd_m = col_g5.number_input(
-        "Comprimento RQD > 10cm (m)", min_value=0.0, value=1.2, step=0.1
-    )
+        st.markdown("**Métricas Calculadas Automatizadas:**")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Avanço do Trecho", f"{avanco:.2f} m")
+        m2.metric("Recuperação (%)", f"{rec_pct:.1f}%")
+        m3.metric("RQD (%)", f"{rqd_pct:.1f}%")
 
-    avanco = ate_m - de_m
-    rec_pct = (rec_m / avanco * 100) if avanco > 0 else 0.0
-    rqd_pct = (rqd_m / avanco * 100) if avanco > 0 else 0.0
+        amostra = st.text_input("Nº da Amostra (se houver)")
+        desc = st.text_area("Descrição Geológico-Geotécnica")
+        obs = st.text_input("Observações Gerais")
 
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("Avanço Calculado", f"{avanco:.2f} m")
-    col_m2.metric("Recuperação (%)", f"{rec_pct:.1f}%")
-    col_m3.metric("RQD (%)", f"{rqd_pct:.1f}%")
+        if st.button(
+            "Salvar Intervalo", type="primary", use_container_width=True
+        ):
+          if ate_m > de_m:
+            if rec_m <= avanco and rqd_m <= rec_m:
+              conn = get_connection()
+              cursor = conn.cursor()
+              cursor.execute(
+                  """
+                                INSERT INTO boletim_geologico 
+                                (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                  (
+                      furo_selecionado,
+                      de_m,
+                      ate_m,
+                      rec_m,
+                      rqd_m,
+                      litologia,
+                      desc,
+                      amostra,
+                      obs,
+                  ),
+              )
+              conn.commit()
+              conn.close()
+              st.success(
+                  f"Intervalo {de_m}m - {ate_m}m salvo com sucesso!"
+              )
+              st.rerun()
+            else:
+              st.error(
+                  "Erro de Validação: A Recuperação deve ser ≤ Avanço e o"
+                  " RQD ≤ Recuperação."
+              )
+          else:
+            st.error("A profundidade 'Até' deve ser maior que 'De'.")
 
-    amostra = st.text_input("Nº da Amostra (se houver)")
-    desc = st.text_area("Descrição Geológico-Geotécnica")
-    obs = st.text_input("Observações Gerais")
-
-    if st.button("Salvar Intervalo", type="primary"):
-      if ate_m > de_m:
-        if rec_m <= avanco and rqd_m <= rec_m:
-          conn = get_connection()
-          cursor = conn.cursor()
-          cursor.execute(
-              """
-                            INSERT INTO boletim_geologico 
-                            (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-              (
-                  furo_selecionado,
-                  de_m,
-                  ate_m,
-                  rec_m,
-                  rqd_m,
-                  litologia,
-                  desc,
-                  amostra,
-                  obs,
+    with tab_excluir:
+      if not df_geo.empty:
+        with st.container(border=True):
+          st.subheader("Remover Trecho Litológico")
+          opcoes_excluir = df_geo.apply(
+              lambda r: (
+                  f"ID {r['id']} | {r['de_m']}m - {r['ate_m']}m"
+                  f" ({r['litologia']})"
               ),
+              axis=1,
+          ).tolist()
+
+          item_selecionado = st.selectbox(
+              "Selecione o trecho a remover:", opcoes_excluir
           )
-          conn.commit()
-          conn.close()
-          st.success(
-              f"Intervalo {de_m}m - {ate_m}m registrado com sucesso!"
-          )
-          st.rerun()
-        else:
-          st.error(
-              "Validação falhou: Recuperação deve ser ≤ Avanço e RQD ≤"
-              " Recuperação."
-          )
-      else:
-        st.error("O valor 'Até' deve ser estritamente maior que 'De'.")
+
+          if st.button(
+              "❌ Confirmar Exclusão",
+              type="secondary",
+              use_container_width=True,
+          ):
+            id_para_excluir = int(item_selecionado.split(" ")[1])
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM boletim_geologico WHERE id = ?",
+                (id_para_excluir,),
+            )
+            conn.commit()
+            conn.close()
+            st.success("Intervalo removido!")
+            st.rerun()
