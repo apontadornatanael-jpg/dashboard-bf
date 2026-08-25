@@ -398,10 +398,14 @@ st.sidebar.download_button(
     use_container_width=True,
 )
 
+# ==============================================================================
+# COMPONENTES DE TELA DA APLICAÇÃO
+# ==============================================================================
+
 # ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL
 # ------------------------------------------------------------------------------
-elif opcao == "Dashboard Geral":
+if opcao == "Dashboard Geral":
     st.title("Painel Geral de Operações")
     st.markdown("---")
 
