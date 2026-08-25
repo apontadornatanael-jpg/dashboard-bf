@@ -276,21 +276,27 @@ if opcao == "📊 Dashboard Geral":
         )
     conn.close()
 
-    # Cálculo seguro de KPIs com tratamento para valores nulos (NaN/None)
+    # --- TRATAMENTO ANTI-BUG TYPEERROR ---
+    # Converte explicitamente colunas para numéricas e trata valores nulos (NaN / None)
+    total_metros = 0.0
+    total_horas_trab = 0.0
+    total_horas_para = 0.0
+    furos_concluidos = 0
+
     if not df_prod.empty:
-        prof_final = df_prod["prof_final"].fillna(0.0)
-        prof_inicial = df_prod["prof_inicial"].fillna(0.0)
-        
-        total_metros = float((prof_final - prof_inicial).sum())
-        total_horas_trab = float(df_prod["horas_trabalhadas"].fillna(0.0).sum())
-        total_horas_para = float(df_prod["horas_paradas"].fillna(0.0).sum())
-    else:
-        total_metros = 0.0
-        total_horas_trab = 0.0
-        total_horas_para = 0.0
+        df_prod["prof_final"] = pd.to_numeric(df_prod["prof_final"], errors="coerce").fillna(0.0)
+        df_prod["prof_inicial"] = pd.to_numeric(df_prod["prof_inicial"], errors="coerce").fillna(0.0)
+        df_prod["horas_trabalhadas"] = pd.to_numeric(df_prod["horas_trabalhadas"], errors="coerce").fillna(0.0)
+        df_prod["horas_paradas"] = pd.to_numeric(df_prod["horas_paradas"], errors="coerce").fillna(0.0)
 
-    furos_concluidos = len(df_furos[df_furos["situacao"] == "Concluído"]) if not df_furos.empty else 0
+        total_metros = float((df_prod["prof_final"] - df_prod["prof_inicial"]).sum())
+        total_horas_trab = float(df_prod["horas_trabalhadas"].sum())
+        total_horas_para = float(df_prod["horas_paradas"].sum())
 
+    if not df_furos.empty:
+        furos_concluidos = int((df_furos["situacao"] == "Concluído").sum())
+
+    # Renderização dos KPIs
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         render_kpi_card("Metros Perfurados", f"{total_metros:.1f} m", "📏")
@@ -306,7 +312,7 @@ if opcao == "📊 Dashboard Geral":
         col_graf1, col_graf2 = st.columns(2)
         with col_graf1:
             st.subheader("Avanço Diário (m)")
-            df_prod["avanço"] = df_prod["prof_final"].fillna(0.0) - df_prod["prof_inicial"].fillna(0.0)
+            df_prod["avanço"] = df_prod["prof_final"] - df_prod["prof_inicial"]
             df_diario = df_prod.groupby("data")["avanço"].sum().reset_index()
             st.bar_chart(df_diario.set_index("data"))
         with col_graf2:
