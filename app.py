@@ -403,10 +403,10 @@ st.sidebar.download_button(
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# 1. DASHBOARD GERAL
+# 1. DASHBOARD GERAL (ILUMINADO E DESTAQUE DE SONDAS)
 # ------------------------------------------------------------------------------
-if opcao == "Dashboard Geral":
-    st.title("Painel Geral de Operações")
+elif opcao == "Dashboard Geral":
+    st.title("⚡ Painel Geral de Operações & Sondas")
     st.markdown("---")
 
     conn = get_connection()
@@ -429,6 +429,8 @@ if opcao == "Dashboard Geral":
 
     sondas_total = len(df_sondas)
     sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
+    sondas_par = len(df_sondas[df_sondas["status"] == "Parada"])
+    sondas_manut = len(df_sondas[df_sondas["status"] == "Manutenção"])
 
     if not df_prod.empty:
         df_hoje = df_prod[df_prod["data"] == str(date.today())]
@@ -440,16 +442,133 @@ if opcao == "Dashboard Geral":
     else:
         metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
 
-    # Indicadores KPI principais
+    # Estilo CSS para Cards Iluminados de KPIs e Sondas
+    st.markdown(
+        """
+        <style>
+        .card-destaque {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            border-left: 5px solid #00f2fe;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(0, 242, 254, 0.15);
+            color: #ffffff;
+        }
+        .card-sonda-op {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid #10b981;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+        .card-sonda-par {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+        .card-sonda-manut {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+        }
+        .status-badge {
+            font-weight: bold;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Indicadores KPI com Iluminação de Destaque
     c1, c2, c3, c4 = st.columns(4)
     with c1: 
-        render_kpi_card("Sondas Vinculadas", f"{sondas_op}/{sondas_total}")
+        st.markdown(f"""
+            <div class="card-destaque">
+                <span style="font-size: 13px; color: #94a3b8;">🟢 SONDAS ATIVAS</span>
+                <h2 style="margin: 5px 0 0 0; color: #4ade80;">{sondas_op} <span style="font-size:16px; color:#cbd5e1;">/ {sondas_total}</span></h2>
+            </div>
+        """, unsafe_allow_html=True)
     with c2: 
-        render_kpi_card("Produção Hoje", f"{metros_hoje:.1f} m")
+        st.markdown(f"""
+            <div class="card-destaque">
+                <span style="font-size: 13px; color: #94a3b8;">🎯 PRODUÇÃO HOJE</span>
+                <h2 style="margin: 5px 0 0 0; color: #38bdf8;">{metros_hoje:.1f} m</h2>
+            </div>
+        """, unsafe_allow_html=True)
     with c3: 
-        render_kpi_card("Total Acumulado", f"{metros_acumulados:.1f} m")
+        st.markdown(f"""
+            <div class="card-destaque">
+                <span style="font-size: 13px; color: #94a3b8;">📐 TOTAL ACUMULADO</span>
+                <h2 style="margin: 5px 0 0 0; color: #818cf8;">{metros_acumulados:.1f} m</h2>
+            </div>
+        """, unsafe_allow_html=True)
     with c4: 
-        render_kpi_card("Eficiência", f"{eficiencia:.0f}%")
+        st.markdown(f"""
+            <div class="card-destaque">
+                <span style="font-size: 13px; color: #94a3b8;">⚡ EFICIÊNCIA OPERACIONAL</span>
+                <h2 style="margin: 5px 0 0 0; color: #f43f5e;">{eficiencia:.0f}%</h2>
+            </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### 🚜 Monitoramento Individual de Sondas")
+
+    if not df_sondas.empty:
+        grid_cols = st.columns(3)
+        for idx, row in df_sondas.iterrows():
+            col_idx = idx % 3
+            status = row["status"]
+
+            if status == "Operando":
+                css_class = "card-sonda-op"
+                cor_status = "#10b981"
+                icone = "🟢"
+            elif status == "Parada":
+                css_class = "card-sonda-par"
+                cor_status = "#ef4444"
+                icone = "🔴"
+            else:
+                css_class = "card-sonda-manut"
+                cor_status = "#f59e0b"
+                icone = "🟡"
+
+            # Busca metragem total produzida por essa sonda específica
+            if not df_prod.empty:
+                prod_sonda = df_prod[df_prod["sonda_id"] == row["id"]]
+                m_sonda = (prod_sonda["prof_final"] - prod_sonda["prof_inicial"]).sum() if not prod_sonda.empty else 0.0
+            else:
+                m_sonda = 0.0
+
+            with grid_cols[col_idx]:
+                st.markdown(
+                    f"""
+                    <div class="{css_class}">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <h3 style="margin:0; font-size:18px;">Sonda {row['codigo']}</h3>
+                            <span class="status-badge" style="background:{cor_status}22; color:{cor_status}; border: 1px solid {cor_status};">
+                                {icone} {status.upper()}
+                            </span>
+                        </div>
+                        <p style="margin:5px 0; font-size:13px; color:#cbd5e1;"><b>Equipe:</b> {row['equipe']}</p>
+                        <p style="margin:2px 0; font-size:13px; color:#cbd5e1;"><b>Projeto:</b> {row['projeto']}</p>
+                        <hr style="margin:8px 0; border:0; border-top:1px solid rgba(255,255,255,0.1);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:12px; color:#94a3b8;">Avanço Acumulado:</span>
+                            <strong style="font-size:15px; color:#38bdf8;">{m_sonda:.1f} m</strong>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+    else:
+        st.info("Nenhuma sonda disponível no momento.")
 
 # ------------------------------------------------------------------------------
 # 2. GESTÃO DE SONDAS (EXCLUSIVO ADMIN)
