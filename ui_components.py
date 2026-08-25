@@ -30,6 +30,6 @@ def render_kpi_card(titulo, valor):
     st.markdown(f"""
         <div class="metric-card">
             <h4>{titulo}</h4>
-            2>{valor}</h2>
+            <h2>{valor}</h2>
         </div>
     """, unsafe_allow_html=True)
