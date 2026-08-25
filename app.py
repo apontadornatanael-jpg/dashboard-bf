@@ -7,10 +7,10 @@ from datetime import date
 import openpyxl
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from streamlit_geolocation import streamlit_geolocation
 
 # IMPORTAÇÃO DOS MÓDULOS MODULARES
 from auth import botao_logout, tela_login
@@ -19,7 +19,7 @@ from ui_components import aplicar_estilo_customizado, render_kpi_card
 
 def latlon_to_utm(lat, lon):
     """Converte Latitude e Longitude em Coordenadas UTM (Easting, Northing)."""
-    if lat == 0.0 and lon == 0.0:
+    if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
         return 0.0, 0.0, 0
 
     a = 6378137.0  # WGS84
@@ -605,8 +605,7 @@ elif opcao == "🚜 Cadastro de Sondas":
                     cursor = conn.cursor()
                     try:
                         cursor.execute(
-                            "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES"
-                            " (?, ?, ?, ?)",
+                            "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)",
                             (codigo, equipe, projeto, status),
                         )
                         conn.commit()
@@ -654,8 +653,7 @@ elif opcao == "🚜 Cadastro de Sondas":
                         cursor = conn.cursor()
                         try:
                             cursor.execute(
-                                "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?,"
-                                " status = ? WHERE id = ?",
+                                "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?, status = ? WHERE id = ?",
                                 (
                                     novo_codigo,
                                     nova_equipe,
@@ -784,9 +782,7 @@ elif opcao == "📝 Apontamento Diário":
                 st.subheader("Remover Apontamento")
                 opcoes_prod_excluir = df_prod_full.apply(
                     lambda r: (
-                        f"ID {r['id']} | Data: {r['data']} | Sonda: {r['sonda_codigo']}"
-                        f" | Furo: {r['furo_id']} ({r['prof_inicial']}m -"
-                        f" {r['prof_final']}m)"
+                        f"ID {r['id']} | Data: {r['data']} | Sonda: {r['sonda_codigo']} | Furo: {r['furo_id']} ({r['prof_inicial']}m - {r['prof_final']}m)"
                     ),
                     axis=1,
                 ).tolist()
@@ -834,48 +830,24 @@ elif opcao == "📍 Controle de Furos":
         if not df_sondas.empty:
             with st.container(border=True):
                 st.subheader("Cadastrar Novo Furo")
+                st.caption(
+                    "Clique no botão abaixo para capturar a localização atual da sonda/dispositivo."
+                )
 
-                # SCRIPT DE CAPTURA DE GEOLOCALIZAÇÃO
-                html_gps = """
-                <script>
-                function getLocation() {
-                    if (navigator.geolocation) {
-                        navigator.geolocation.getCurrentPosition(
-                            (position) => {
-                                const lat = position.coords.latitude;
-                                const lon = position.coords.longitude;
-                                const params = new URLSearchParams(window.location.search);
-                                params.set("gps_lat", lat);
-                                params.set("gps_lon", lon);
-                                window.parent.location.search = params.toString();
-                            },
-                            (error) => {
-                                alert("Erro ao capturar GPS: " + error.message);
-                            },
-                            { enableHighAccuracy: true }
-                        );
-                    } else {
-                        alert("Geolocalização não é suportada por este navegador.");
-                    }
-                }
-                </script>
-                <button onclick="getLocation()" style="background-color: #1F4E79; color: white; padding: 10px 18px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%;">
-                    📡 CAPTURAR LOCALIZAÇÃO VIA GPS DO DISPOSITIVO
-                </button>
-                """
-                components.html(html_gps, height=50)
+                # CAPTURA DE GPS NATIVA VIA STREAMLIT-GEOLOCATION
+                location = streamlit_geolocation()
 
-                # RECUPERA COORDENADAS VIA QUERY PARAMS
-                query_params = st.query_params
-                lat_cap = float(query_params.get("gps_lat", 0.0))
-                lon_cap = float(query_params.get("gps_lon", 0.0))
-
-                easting_auto, northing_auto, fuso_auto = latlon_to_utm(lat_cap, lon_cap)
-
-                if lat_cap != 0.0:
+                if location and location.get("latitude"):
+                    lat_cap = location["latitude"]
+                    lon_cap = location["longitude"]
+                    easting_auto, northing_auto, fuso_auto = latlon_to_utm(
+                        lat_cap, lon_cap
+                    )
                     st.success(
                         f"📍 GPS Capturado: Lat {lat_cap:.6f}, Lon {lon_cap:.6f} | UTM: E {easting_auto:.2f}, N {northing_auto:.2f} (Fuso {fuso_auto})"
                     )
+                else:
+                    easting_auto, northing_auto = 0.0, 0.0
 
                 with st.form("form_furo", clear_on_submit=True):
                     c1, c2, c3 = st.columns(3)
@@ -945,8 +917,7 @@ elif opcao == "📍 Controle de Furos":
                     "Selecione o Furo:", df_furos_full["id"].tolist()
                 )
                 st.warning(
-                    "⚠️ Ação Irreversível: Ao excluir o furo, todos os apontamentos e"
-                    " boletins associados serão removidos."
+                    "⚠️ Ação Irreversível: Ao excluir o furo, todos os apontamentos e boletins associados serão removidos."
                 )
 
                 if st.button(
