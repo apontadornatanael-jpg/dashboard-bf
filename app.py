@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import io
+import base64
 from datetime import date
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -12,7 +13,31 @@ from openpyxl.utils import get_column_letter
 from auth import tela_login, botao_logout
 from ui_components import aplicar_estilo_customizado, render_kpi_card
 
+def add_bg_from_local(image_file):
+    try:
+        with open(image_file, "rb") as image:
+            encoded_string = base64.b64encode(image.read())
+        st.markdown(
+            f"""
+            <style>
+            .stApp {{
+                background-image: url("data:image/png;base64,{encoded_string.decode()}");
+                background-size: cover;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-attachment: fixed;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    except FileNotFoundError:
+        pass
+
 st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
+
+# APLICA O PLANO DE FUNDO (Certifique-se de que a imagem 'logo_empresa.png' está salva no GitHub)
+add_bg_from_local("logo_empresa.png")
 
 # 1. APLICAÇÃO DE ESTILOS E AUTENTICAÇÃO
 aplicar_estilo_customizado()
