@@ -8,13 +8,28 @@ from datetime import date
 import openpyxl
 import pandas as pd
 import streamlit as st
-from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from streamlit_geolocation import streamlit_geolocation
 
 # IMPORTAÇÃO DOS MÓDULOS CUSTOMIZADOS
 from ui_components import aplicar_estilo_customizado, render_kpi_card
+
+# ==============================================================================
+# INICIALIZAÇÃO DA APLICAÇÃO E SESSION STATE (EVITA KEYERROR)
+# ==============================================================================
+
+st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
+
+# Garantir que todas as chaves de sessão existam antes de qualquer leitura
+if "autenticado" not in st.session_state:
+    st.session_state["autenticado"] = False
+if "usuario" not in st.session_state:
+    st.session_state["usuario"] = ""
+if "perfil" not in st.session_state:
+    st.session_state["perfil"] = ""
+if "sonda_id" not in st.session_state:
+    st.session_state["sonda_id"] = None
 
 # ==============================================================================
 # AUTENTICAÇÃO E GESTÃO DE USUÁRIOS (RBAC)
@@ -45,7 +60,7 @@ def criar_tabela_usuarios():
         )
     """)
 
-    # Garante que as tabelas do sistema existam
+    # Tabelas auxiliares
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sondas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,13 +144,7 @@ def verificar_login(usuario, senha):
 def tela_login():
     criar_tabela_usuarios()
 
-    if "autenticado" not in st.session_state:
-        st.session_state["autenticado"] = False
-        st.session_state["usuario"] = ""
-        st.session_state["perfil"] = ""
-        st.session_state["sonda_id"] = None
-
-    if not st.session_state["autenticado"]:
+    if not st.session_state.get("autenticado", False):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             st.subheader("🔐 Acesso ao Sistema")
@@ -159,7 +168,7 @@ def tela_login():
 
 def botao_logout():
     st.sidebar.markdown(
-        f"👤 **{st.session_state['usuario']}** ({st.session_state['perfil']})"
+        f"👤 **{st.session_state.get('usuario', '')}** ({st.session_state.get('perfil', '')})"
     )
     if st.sidebar.button("Sair / Logout"):
         st.session_state["autenticado"] = False
@@ -494,20 +503,23 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
 
 
 # ==============================================================================
-# INICIALIZAÇÃO DA APLICAÇÃO
+# CARREGAMENTO DE ESTILOS E AUTENTICAÇÃO
 # ==============================================================================
 
-st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
 add_bg_from_local("logo_empresa.png")
 aplicar_estilo_customizado()
 
 if not tela_login():
     st.stop()
 
-perfil_atual = st.session_state["perfil"]
-sonda_id_atual = st.session_state["sonda_id"]
+# Leitura segura dos dados de sessão
+perfil_atual = st.session_state.get("perfil", "")
+sonda_id_atual = st.session_state.get("sonda_id", None)
 
+# ==============================================================================
 # NAVEGAÇÃO STREAMLIT & SIDEBAR
+# ==============================================================================
+
 st.sidebar.title("🛠️ CENTRAL DE CONTROLE")
 botao_logout()
 st.sidebar.markdown("---")
