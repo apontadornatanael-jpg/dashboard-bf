@@ -1,0 +1,7 @@
+streamlit
+pandas
+openpyxl
+requests
+pillow
+supabase
+sqlite3-api
