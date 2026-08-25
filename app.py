@@ -401,24 +401,34 @@ st.sidebar.download_button(
 # ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL
 # ------------------------------------------------------------------------------
-if opcao == "Dashboard Geral":
+elif opcao == "Dashboard Geral":
     st.title("Painel Geral de Operações")
     st.markdown("---")
 
     conn = get_connection()
     if perfil_atual == "Admin":
         df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
-        df_prod = pd.read_sql_query("SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id", conn)
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id", 
+            conn
+        )
     else:
-        df_sondas = pd.read_sql_query("SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,))
-        df_prod = pd.read_sql_query("SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?", conn, params=(sonda_id_atual,))
+        df_sondas = pd.read_sql_query(
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
+        )
+        df_prod = pd.read_sql_query(
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?", 
+            conn, 
+            params=(sonda_id_atual,)
+        )
     conn.close()
 
     sondas_total = len(df_sondas)
     sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
 
     if not df_prod.empty:
-        metros_hoje = df_prod[df_prod["data"] == str(date.today())]["prof_final"].sum() - df_prod[df_prod["data"] == str(date.today())]["prof_inicial"].sum()
+        df_hoje = df_prod[df_prod["data"] == str(date.today())]
+        metros_hoje = df_hoje["prof_final"].sum() - df_hoje["prof_inicial"].sum()
         metros_acumulados = (df_prod["prof_final"] - df_prod["prof_inicial"]).sum()
         hrs_trab = df_prod["horas_trabalhadas"].sum()
         hrs_par = df_prod["horas_paradas"].sum()
@@ -426,25 +436,16 @@ if opcao == "Dashboard Geral":
     else:
         metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
 
+    # Apenas os 4 indicadores KPI principais
     c1, c2, c3, c4 = st.columns(4)
-    with c1: render_kpi_card("Sondas Vinculadas", f"{sondas_op}/{sondas_total}")
-    with c2: render_kpi_card("Produção Hoje", f"{metros_hoje:.1f} m")
-    with c3: render_kpi_card("Total Acumulado", f"{metros_acumulados:.1f} m")
-    with c4: render_kpi_card("Eficiência", f"{eficiencia:.0f}%")
-
-    st.markdown("---")
-    st.subheader("Status dos Equipamentos")
-    if not df_sondas.empty:
-        cols = st.columns(min(max(sondas_total, 1), 4))
-        for i, (_, sonda) in enumerate(df_sondas.iterrows()):
-            with cols[i % 4]:
-                with st.container(border=True):
-                    st.markdown(f"### {sonda['codigo']}")
-                    st.write(f"**Equipe:** {sonda['equipe']}")
-                    st.write(f"**Projeto:** {sonda['projeto']}")
-                    st.write(f"**Status:** {sonda['status']}")
-    else:
-        st.info("Nenhuma sonda vinculada a esta conta.")
+    with c1: 
+        render_kpi_card("Sondas Vinculadas", f"{sondas_op}/{sondas_total}")
+    with c2: 
+        render_kpi_card("Produção Hoje", f"{metros_hoje:.1f} m")
+    with c3: 
+        render_kpi_card("Total Acumulado", f"{metros_acumulados:.1f} m")
+    with c4: 
+        render_kpi_card("Eficiência", f"{eficiencia:.0f}%")
 
 # ------------------------------------------------------------------------------
 # 2. GESTÃO DE SONDAS (EXCLUSIVO ADMIN)
