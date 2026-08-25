@@ -1,11 +1,13 @@
 import base64
 import io
+import math
 import sqlite3
 from datetime import date
 
 import openpyxl
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -13,6 +15,69 @@ from openpyxl.utils import get_column_letter
 # IMPORTAÇÃO DOS MÓDULOS MODULARES
 from auth import botao_logout, tela_login
 from ui_components import aplicar_estilo_customizado, render_kpi_card
+
+
+def latlon_to_utm(lat, lon):
+    """Converte Latitude e Longitude em Coordenadas UTM (Easting, Northing)."""
+    if lat == 0.0 and lon == 0.0:
+        return 0.0, 0.0, 0
+
+    a = 6378137.0  # WGS84
+    f = 1 / 298.257223563
+    b = a * (1 - f)
+    e_sq = (a**2 - b**2) / (a**2)
+    k0 = 0.9996
+
+    zone_number = int((lon + 180) / 6) + 1
+    lon0 = (zone_number - 1) * 6 - 180 + 3
+
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    lon0_rad = math.radians(lon0)
+
+    N = a / math.sqrt(1 - e_sq * math.sin(lat_rad) ** 2)
+    T = math.tan(lat_rad) ** 2
+    C = (e_sq / (1 - e_sq)) * math.cos(lat_rad) ** 2
+    A = (lon_rad - lon0_rad) * math.cos(lat_rad)
+
+    M = a * (
+        (1 - e_sq / 4 - 3 * e_sq**2 / 64 - 5 * e_sq**3 / 256) * lat_rad
+        - (3 * e_sq / 8 + 3 * e_sq**2 / 32 + 45 * e_sq**3 / 1024)
+        * math.sin(2 * lat_rad)
+        + (15 * e_sq**2 / 256 + 45 * e_sq**3 / 1024) * math.sin(4 * lat_rad)
+        - (35 * e_sq**3 / 3072) * math.sin(6 * lat_rad)
+    )
+
+    easting = (
+        k0
+        * N
+        * (
+            A
+            + (1 - T + C) * A**3 / 6
+            + (5 - 18 * T + T**2 + 72 * C - 58 * (e_sq / (1 - e_sq)))
+            * A**5
+            / 120
+        )
+        + 500000.0
+    )
+
+    northing = k0 * (
+        M
+        + N
+        * math.tan(lat_rad)
+        * (
+            A**2 / 2
+            + (5 - T + 9 * C + 4 * C**2) * A**4 / 24
+            + (61 - 58 * T + T**2 + 600 * C - 330 * (e_sq / (1 - e_sq)))
+            * A**6
+            / 720
+        )
+    )
+
+    if lat < 0:
+        northing += 10000000.0
+
+    return round(easting, 2), round(northing, 2), zone_number
 
 
 def add_bg_from_local(image_file):
@@ -768,18 +833,71 @@ elif opcao == "📍 Controle de Furos":
     with tab_novo:
         if not df_sondas.empty:
             with st.container(border=True):
+                st.subheader("Cadastrar Novo Furo")
+
+                # SCRIPT DE CAPTURA DE GEOLOCALIZAÇÃO
+                html_gps = """
+                <script>
+                function getLocation() {
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(
+                            (position) => {
+                                const lat = position.coords.latitude;
+                                const lon = position.coords.longitude;
+                                const params = new URLSearchParams(window.location.search);
+                                params.set("gps_lat", lat);
+                                params.set("gps_lon", lon);
+                                window.parent.location.search = params.toString();
+                            },
+                            (error) => {
+                                alert("Erro ao capturar GPS: " + error.message);
+                            },
+                            { enableHighAccuracy: true }
+                        );
+                    } else {
+                        alert("Geolocalização não é suportada por este navegador.");
+                    }
+                }
+                </script>
+                <button onclick="getLocation()" style="background-color: #1F4E79; color: white; padding: 10px 18px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%;">
+                    📡 CAPTURAR LOCALIZAÇÃO VIA GPS DO DISPOSITIVO
+                </button>
+                """
+                components.html(html_gps, height=50)
+
+                # RECUPERA COORDENADAS VIA QUERY PARAMS
+                query_params = st.query_params
+                lat_cap = float(query_params.get("gps_lat", 0.0))
+                lon_cap = float(query_params.get("gps_lon", 0.0))
+
+                easting_auto, northing_auto, fuso_auto = latlon_to_utm(lat_cap, lon_cap)
+
+                if lat_cap != 0.0:
+                    st.success(
+                        f"📍 GPS Capturado: Lat {lat_cap:.6f}, Lon {lon_cap:.6f} | UTM: E {easting_auto:.2f}, N {northing_auto:.2f} (Fuso {fuso_auto})"
+                    )
+
                 with st.form("form_furo", clear_on_submit=True):
-                    st.subheader("Cadastrar Novo Furo")
                     c1, c2, c3 = st.columns(3)
                     id_furo = c1.text_input("ID do Furo (ex: F-01)")
-                    sonda_furo = c2.selectbox("Sonda Alocada", df_sondas["codigo"].tolist())
+                    sonda_furo = c2.selectbox(
+                        "Sonda Alocada", df_sondas["codigo"].tolist()
+                    )
                     prof_plan = c3.number_input(
                         "Profundidade Planejada (m)", min_value=1.0, step=5.0
                     )
 
                     c4, c5, c6 = st.columns(3)
-                    coord_e = c4.number_input("Coordenada East (E)", value=0.0)
-                    coord_n = c5.number_input("Coordenada North (N)", value=0.0)
+                    coord_e = c4.number_input(
+                        "Coordenada East (E)",
+                        value=float(easting_auto),
+                        format="%.2f",
+                    )
+                    coord_n = c5.number_input(
+                        "Coordenada North (N)",
+                        value=float(northing_auto),
+                        format="%.2f",
+                    )
                     cota = c6.number_input("Cota (Z)", value=0.0)
 
                     btn_furo = st.form_submit_button(
@@ -788,7 +906,9 @@ elif opcao == "📍 Controle de Furos":
 
                     if btn_furo and id_furo and sonda_furo:
                         sonda_id = int(
-                            df_sondas[df_sondas["codigo"] == sonda_furo]["id"].values[0]
+                            df_sondas[df_sondas["codigo"] == sonda_furo][
+                                "id"
+                            ].values[0]
                         )
                         conn = get_connection()
                         cursor = conn.cursor()
@@ -798,7 +918,14 @@ elif opcao == "📍 Controle de Furos":
                                 INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada)
                                 VALUES (?, ?, ?, ?, ?, ?)
                                 """,
-                                (id_furo, sonda_id, coord_e, coord_n, cota, prof_plan),
+                                (
+                                    id_furo,
+                                    sonda_id,
+                                    coord_e,
+                                    coord_n,
+                                    cota,
+                                    prof_plan,
+                                ),
                             )
                             conn.commit()
                             st.success(f"Furo {id_furo} cadastrado!")
@@ -880,128 +1007,62 @@ elif opcao == "⛏️ Boletim Geológico":
         )
         conn.close()
 
-        tab_perfil, tab_novo, tab_excluir = st.tabs(
-            ["📋 Perfil Registrado", "➕ Novo Intervalo", "🗑️ Excluir Intervalo"]
+        tab_boletim, tab_novo_trecho = st.tabs(
+            ["📋 Registros do Furo", "➕ Novo Trecho Geológico"]
         )
 
-        with tab_perfil:
+        with tab_boletim:
             if not df_geo.empty:
                 st.dataframe(df_geo, use_container_width=True, hide_index=True)
             else:
-                st.info(
-                    f"Nenhum registro geológico para o furo {furo_selecionado}."
-                )
+                st.info("Nenhum trecho geológico registrado para este furo.")
 
-        with tab_novo:
+        with tab_novo_trecho:
             with st.container(border=True):
-                st.subheader("Registrar Intervalo Litológico")
-                c1, c2, c3 = st.columns(3)
-                de_m = c1.number_input("De (m)", min_value=0.0, value=0.0, step=0.5)
-                ate_m = c2.number_input("Até (m)", min_value=0.0, value=2.0, step=0.5)
-                litologia = c3.selectbox(
-                    "Litologia Dominante",
-                    [
-                        "Solo de Alteração",
-                        "Basalto Alterado",
-                        "Basalto Sano",
-                        "Gnaisse",
-                        "Quartzito",
-                        "Filito",
-                        "Itabirito",
-                        "Outros",
-                    ],
-                )
+                with st.form("form_boletim", clear_on_submit=True):
+                    st.subheader(f"Novo Trecho para {furo_selecionado}")
+                    c1, c2, c3, c4 = st.columns(4)
+                    de_m = c1.number_input("De (m)", min_value=0.0, step=0.5)
+                    ate_m = c2.number_input("Até (m)", min_value=0.0, step=0.5)
+                    rec_m = c3.number_input(
+                        "Recuperação (m)", min_value=0.0, step=0.1
+                    )
+                    rqd_m = c4.number_input("RQD (m)", min_value=0.0, step=0.1)
 
-                c4, c5 = st.columns(2)
-                rec_m = c4.number_input(
-                    "Recuperação Obtida (m)", min_value=0.0, value=1.8, step=0.1
-                )
-                rqd_m = c5.number_input(
-                    "Comprimento RQD > 10cm (m)", min_value=0.0, value=1.2, step=0.1
-                )
+                    c5, c6 = st.columns(2)
+                    litologia = c5.text_input("Litologia / Rocha")
+                    amostra = c6.text_input("Nº da Amostra")
 
-                avanco = ate_m - de_m
-                rec_pct = (rec_m / avanco * 100) if avanco > 0 else 0.0
-                rqd_pct = (rqd_m / avanco * 100) if avanco > 0 else 0.0
+                    desc = st.text_area("Descrição Geológica")
+                    obs = st.text_input("Observações")
 
-                st.markdown("**Métricas Calculadas Automatizadas:**")
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Avanço do Trecho", f"{avanco:.2f} m")
-                m2.metric("Recuperação (%)", f"{rec_pct:.1f}%")
-                m3.metric("RQD (%)", f"{rqd_pct:.1f}%")
-
-                amostra = st.text_input("Nº da Amostra (se houver)")
-                desc = st.text_area("Descrição Geológico-Geotécnica")
-                obs = st.text_input("Observações Gerais")
-
-                if st.button(
-                    "Salvar Intervalo", type="primary", use_container_width=True
-                ):
-                    if ate_m > de_m:
-                        if rec_m <= avanco and rqd_m <= rec_m:
-                            conn = get_connection()
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                """
-                                INSERT INTO boletim_geologico 
-                                (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                (
-                                    furo_selecionado,
-                                    de_m,
-                                    ate_m,
-                                    rec_m,
-                                    rqd_m,
-                                    litologia,
-                                    desc,
-                                    amostra,
-                                    obs,
-                                ),
-                            )
-                            conn.commit()
-                            conn.close()
-                            st.success(
-                                f"Intervalo {de_m}m - {ate_m}m salvo com sucesso!"
-                            )
-                            st.rerun()
-                        else:
-                            st.error(
-                                "Erro de Validação: A Recuperação deve ser ≤ Avanço e o"
-                                " RQD ≤ Recuperação."
-                            )
-                    else:
-                        st.error("A profundidade 'Até' deve ser maior que 'De'.")
-
-        with tab_excluir:
-            if not df_geo.empty:
-                with st.container(border=True):
-                    st.subheader("Remover Trecho Litológico")
-                    opcoes_excluir = df_geo.apply(
-                        lambda r: (
-                            f"ID {r['id']} | {r['de_m']}m - {r['ate_m']}m"
-                            f" ({r['litologia']})"
-                        ),
-                        axis=1,
-                    ).tolist()
-
-                    item_selecionado = st.selectbox(
-                        "Selecione o trecho a remover:", opcoes_excluir
+                    btn_salvar_geo = st.form_submit_button(
+                        "Salvar Trecho Geológico",
+                        type="primary",
+                        use_container_width=True,
                     )
 
-                    if st.button(
-                        "❌ Confirmar Exclusão do Trecho",
-                        type="secondary",
-                        use_container_width=True,
-                    ):
-                        id_geo_excluir = int(item_selecionado.split(" ")[1])
+                    if btn_salvar_geo and ate_m > de_m:
                         conn = get_connection()
                         cursor = conn.cursor()
                         cursor.execute(
-                            "DELETE FROM boletim_geologico WHERE id = ?",
-                            (id_geo_excluir,),
+                            """
+                            INSERT INTO boletim_geologico (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                furo_selecionado,
+                                de_m,
+                                ate_m,
+                                rec_m,
+                                rqd_m,
+                                litologia,
+                                desc,
+                                amostra,
+                                obs,
+                            ),
                         )
                         conn.commit()
                         conn.close()
-                        st.success("Trecho litológico removido com sucesso!")
+                        st.success("Trecho geológico adicionado com sucesso!")
                         st.rerun()
