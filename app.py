@@ -39,11 +39,6 @@ if "sonda_id" not in st.session_state:
 # CONEXÃO E CONFIGURAÇÃO DO SUPABASE
 # ==============================================================================
 
-# Defina as chaves do Supabase em .streamlit/secrets.toml ou diretamente aqui para testes:
-# [supabase]
-# url = "https://seu-projeto.supabase.co"
-# key = "sua-chave-anon-ou-service-role"
-
 SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://seu-projeto.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sua-chave-aqui")
 
@@ -111,7 +106,16 @@ def criar_tabela_usuarios():
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Tabela de usuários com vínculo de sonda_id
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sondas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE NOT NULL,
+            equipe TEXT NOT NULL,
+            projeto TEXT NOT NULL,
+            status TEXT CHECK(status IN ('Operando', 'Parada', 'Manutenção')) DEFAULT 'Operando'
+        )
+    """)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,17 +124,6 @@ def criar_tabela_usuarios():
             perfil TEXT CHECK(perfil IN ('Admin', 'Geólogo', 'Operador')) NOT NULL,
             sonda_id INTEGER,
             FOREIGN KEY(sonda_id) REFERENCES sondas(id)
-        )
-    """)
-
-    # Tabelas auxiliares
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sondas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE NOT NULL,
-            equipe TEXT NOT NULL,
-            projeto TEXT NOT NULL,
-            status TEXT CHECK(status IN ('Operando', 'Parada', 'Manutenção')) DEFAULT 'Operando'
         )
     """)
 
@@ -181,7 +174,6 @@ def criar_tabela_usuarios():
         )
     """)
 
-    # Cria usuário Admin padrão caso o banco esteja vazio
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
@@ -359,8 +351,8 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
         df_geo = pd.read_sql_query(
             """
             SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
-                   ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
-                   rqd_m, ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
+                   ROUND((recuperacao_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as recuperacao_pct,
+                   rqd_m, ROUND((rqd_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
             FROM boletim_geologico ORDER BY furo_id, de_m ASC
         """,
             conn,
@@ -377,8 +369,8 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
         df_geo = pd.read_sql_query(
             """
             SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
-                   ROUND((bg.recuperacao_m / (bg.ate_m - bg.de_m)) * 100, 1) as recuperacao_pct,
-                   bg.rqd_m, ROUND((bg.rqd_m / (bg.ate_m - bg.de_m)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
+                   ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as recuperacao_pct,
+                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
             FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
         """,
             conn,
@@ -580,7 +572,6 @@ aplicar_estilo_customizado()
 if not tela_login():
     st.stop()
 
-# Leitura segura dos dados de sessão
 perfil_atual = st.session_state.get("perfil", "")
 sonda_id_atual = st.session_state.get("sonda_id", None)
 
@@ -826,7 +817,7 @@ elif opcao == "📝 Apontamento Diário":
     conn = get_connection()
     if perfil_atual == "Admin":
         df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
-        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos", conn)
         df_prod_full = pd.read_sql_query(
             """
             SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
@@ -843,7 +834,7 @@ elif opcao == "📝 Apontamento Diário":
             params=(sonda_id_atual,),
         )
         df_furos = pd.read_sql_query(
-            "SELECT id FROM furos WHERE sonda_id = ?",
+            "SELECT id, sonda_id FROM furos WHERE sonda_id = ?",
             conn,
             params=(sonda_id_atual,),
         )
@@ -870,264 +861,94 @@ elif opcao == "📝 Apontamento Diário":
             st.info("Nenhum apontamento registrado.")
 
     with tab_novo:
-        if not df_sondas.empty:
+        if not df_sondas.empty and not df_furos.empty:
             with st.container(border=True):
                 with st.form("form_producao", clear_on_submit=True):
                     st.subheader("Registrar Avanço Diário")
                     c1, c2, c3 = st.columns(3)
-                    data_reg = c1.date_input("Data", date.today())
-                    sonda_sel = c2.selectbox("Sonda", df_sondas["codigo"].tolist())
-                    lista_furos = (
-                        df_furos["id"].tolist()
-                        if not df_furos.empty
-                        else ["Sem Furo Cadastrado"]
+                    data_reg = c1.date_input("Data do Avanço", value=date.today())
+                    
+                    sonda_sel = c2.selectbox(
+                        "Sonda",
+                        df_sondas["codigo"].tolist()
                     )
-                    furo_sel = c3.selectbox("Furo", lista_furos)
+                    sonda_id_sel = df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
+
+                    furos_filtrados = df_furos[df_furos["sonda_id"] == sonda_id_sel]["id"].tolist()
+                    furo_sel = c3.selectbox("Furo", furos_filtrados if furos_filtrados else ["Nenhum furo cadastrado"])
 
                     c4, c5 = st.columns(2)
-                    prof_in = c4.number_input(
-                        "Profundidade Inicial (m)", min_value=0.0, step=0.1
-                    )
-                    prof_fim = c5.number_input(
-                        "Profundidade Final (m)", min_value=0.0, step=0.1
-                    )
+                    prof_ini = c4.number_input("Profundidade Inicial (m)", min_value=0.0, step=0.5)
+                    prof_fin = c5.number_input("Profundidade Final (m)", min_value=0.0, step=0.5)
 
-                    c6, c7 = st.columns(2)
-                    hrs_trab = c6.number_input(
-                        "Horas Trabalhadas",
-                        min_value=0.0,
-                        max_value=24.0,
-                        value=8.0,
-                        step=0.5,
-                    )
-                    hrs_par = c7.number_input(
-                        "Horas Paradas",
-                        min_value=0.0,
-                        max_value=24.0,
-                        value=0.0,
-                        step=0.5,
-                    )
-                    motivo_parada = st.text_input("Motivo da Parada")
+                    c6, c7, c8 = st.columns(3)
+                    hrs_trab = c6.number_input("Horas Trabalhadas", min_value=0.0, max_value=24.0, step=0.5)
+                    hrs_par = c7.number_input("Horas Paradas", min_value=0.0, max_value=24.0, step=0.5)
+                    motivo_parada = c8.text_input("Motivo da Parada")
 
-                    btn_reg = st.form_submit_button(
-                        "Lançar Produção", type="primary", use_container_width=True
-                    )
+                    btn_salvar_prod = st.form_submit_button("Salvar Apontamento", type="primary", use_container_width=True)
 
-                    if btn_reg and prof_fim >= prof_in:
-                        s_id = int(
-                            df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
-                        )
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """
-                            INSERT INTO producao_diaria (data, sonda_id, furo_id, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                str(data_reg),
-                                s_id,
-                                furo_sel,
-                                prof_in,
-                                prof_fim,
-                                hrs_trab,
-                                hrs_par,
-                                motivo_parada,
-                            ),
-                        )
-                        conn.commit()
-                        conn.close()
-                        st.success("Apontamento registrado com sucesso!")
-                        st.rerun()
+                    if btn_salvar_prod:
+                        if prof_fin < prof_ini:
+                            st.error("A profundidade final deve ser maior ou igual à inicial.")
+                        elif furo_sel == "Nenhum furo cadastrado":
+                            st.error("Selecione um furo válido.")
+                        else:
+                            conn = get_connection()
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                """
+                                INSERT INTO producao_diaria (data, sonda_id, furo_id, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (data_reg, int(sonda_id_sel), furo_sel, prof_ini, prof_fin, hrs_trab, hrs_par, motivo_parada)
+                            )
+                            cursor.execute(
+                                "UPDATE furos SET prof_executada = ?, situacao = 'Em Andamento' WHERE id = ?",
+                                (prof_fin, furo_sel)
+                            )
+                            conn.commit()
+                            conn.close()
+                            st.success("Apontamento registrado com sucesso!")
+                            st.rerun()
+        else:
+            st.warning("É necessário ter pelo menos uma sonda e um furo cadastrados para registrar produções.")
 
     with tab_excluir:
-        if perfil_atual == "Admin" and not df_prod_full.empty:
-            reg_id = st.selectbox(
-                "Selecione o ID do Apontamento para Excluir",
-                df_prod_full["id"].tolist(),
-            )
-            if st.button("Confirmar Exclusão", type="primary"):
-                conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM producao_diaria WHERE id = ?", (reg_id,)
-                )
-                conn.commit()
-                conn.close()
-                st.success("Registro removido!")
-                st.rerun()
-
-# ------------------------------------------------------------------------------
-# 4. BOLETIM GEOLÓGICO (COM UPLOAD DE FOTOS E INTEGRAÇÃO SUPABASE)
-# ------------------------------------------------------------------------------
-elif opcao == "⛏️ Boletim Geológico":
-    st.title("⛏️ Boletim Geológico / Descrição de Testemunhos")
-    st.caption(
-        "Lançamento litológico, RQD, porcentagens e registro fotográfico no Supabase."
-    )
-    st.markdown("---")
-
-    conn = get_connection()
-    df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
-    df_boletim = pd.read_sql_query(
-        """
-        SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m,
-               ROUND((recuperacao_m / (ate_m - de_m)) * 100, 1) as recuperacao_pct,
-               rqd_m, ROUND((rqd_m / (ate_m - de_m)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
-        FROM boletim_geologico ORDER BY furo_id, de_m ASC
-    """,
-        conn,
-    )
-    conn.close()
-
-    tab_visu, tab_novo_boletim = st.tabs(
-        ["📋 Boletins Registrados", "➕ Registrar Manobra / Fotos"]
-    )
-
-    with tab_visu:
-        if not df_boletim.empty:
-            st.dataframe(df_boletim, use_container_width=True, hide_index=True)
+        if perfil_atual in ["Admin", "Geólogo"]:
+            if not df_prod_full.empty:
+                reg_id = st.selectbox("Selecione o ID do registro para excluir", df_prod_full["id"].tolist())
+                if st.button("Confirmar Exclusão", type="primary"):
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM producao_diaria WHERE id = ?", (reg_id,))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Registro ID {reg_id} removido!")
+                    st.rerun()
+            else:
+                st.info("Nenhum registro para excluir.")
         else:
-            st.info("Nenhum registro geológico encontrado.")
-
-    with tab_novo_boletim:
-        if not df_furos.empty:
-            with st.container(border=True):
-                with st.form("form_boletim_geo", clear_on_submit=True):
-                    st.subheader("Registrar Manobra de Sondagem & Fotos")
-                    furo_id = st.selectbox("Selecione o Furo", df_furos["id"].tolist())
-
-                    c1, c2 = st.columns(2)
-                    de_m = c1.number_input("De (m)", min_value=0.0, step=0.1)
-                    ate_m = c2.number_input("Até (m)", min_value=0.0, step=0.1)
-
-                    c3, c4 = st.columns(2)
-                    rec_m = c3.number_input(
-                        "Recuperação (m)", min_value=0.0, step=0.01
-                    )
-                    rqd_m = c4.number_input("RQD (m)", min_value=0.0, step=0.01)
-
-                    c5, c6 = st.columns(2)
-                    litologia = c5.selectbox(
-                        "Litologia",
-                        [
-                            "Solo / Aluvião",
-                            "Saprolito",
-                            "Gnaisse",
-                            "Granito",
-                            "Xisto",
-                            "Quartzito",
-                            "Outros",
-                        ],
-                    )
-                    n_amostra = c6.text_input("Nº da Amostra (se houver)")
-
-                    desc_geo = st.text_area(
-                        "Descrição Geológico-Geotécnica",
-                        placeholder="Grau de alteração, coerência, fraturamento...",
-                    )
-                    obs = st.text_input("Observações Gerais")
-
-                    # CAMPO DE UPLOAD DA FOTO DO TESTEMUNHO
-                    foto_upload = st.file_uploader(
-                        "📷 Foto do Testemunho / Caixa",
-                        type=["jpg", "jpeg", "png"],
-                    )
-
-                    btn_salvar_geo = st.form_submit_button(
-                        "💾 Salvar Boletim no Banco & Supabase Storage",
-                        type="primary",
-                        use_container_width=True,
-                    )
-
-                    if btn_salvar_geo and ate_m > de_m:
-                        url_foto_supabase = None
-
-                        # Realiza o Upload da Imagem para o Supabase Storage se arquivo anexado
-                        if foto_upload is not None:
-                            with st.spinner(
-                                "Enviando imagem para o Supabase Storage..."
-                            ):
-                                url_foto_supabase = upload_foto_supabase(
-                                    foto_upload, foto_upload.name
-                                )
-
-                        # Estruturação dos dados para envio ao Supabase Database (PostgreSQL)
-                        dados_supabase = {
-                            "furo_id": furo_id,
-                            "de_m": float(de_m),
-                            "ate_m": float(ate_m),
-                            "recuperacao_m": float(rec_m),
-                            "rqd_m": float(rqd_m),
-                            "litologia": litologia,
-                            "n_amostra": n_amostra,
-                            "descricao_geologica": desc_geo,
-                            "observacoes": obs,
-                            "foto_url": url_foto_supabase,
-                        }
-
-                        # Envio ao Supabase
-                        salvar_boletim_supabase(dados_supabase)
-
-                        # Backup Local em SQLite
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """
-                            INSERT INTO boletim_geologico (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                furo_id,
-                                de_m,
-                                ate_m,
-                                rec_m,
-                                rqd_m,
-                                litologia,
-                                desc_geo,
-                                n_amostra,
-                                obs,
-                                url_foto_supabase,
-                            ),
-                        )
-                        conn.commit()
-                        conn.close()
-
-                        st.success(
-                            "Manobra e Fotos salvas com sucesso no Supabase!"
-                        )
-                        st.rerun()
-        else:
-            st.warning("Cadastre um furo antes de lançar o boletim.")
+            st.error("Perfil de Operador não tem permissão para excluir registros.")
 
 # ------------------------------------------------------------------------------
-# 5. CONTROLE DE FUROS
+# 4. CONTROLE DE FUROS
 # ------------------------------------------------------------------------------
 elif opcao == "📍 Controle de Furos":
-    st.title("📍 Controle de Furos")
-    st.caption("Mapeamento e acompanhamento do avanço dos furos de sondagem.")
+    st.title("📍 Controle de Furos de Sondagem")
+    st.caption("Planejamento, coordenadas geográficas e status de perfuração.")
     st.markdown("---")
 
     conn = get_connection()
     if perfil_atual == "Admin":
-        df_furos = pd.read_sql_query("SELECT * FROM furos", conn)
+        df_furos = pd.read_sql_query("SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id", conn)
         df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
     else:
-        df_furos = pd.read_sql_query(
-            "SELECT * FROM furos WHERE sonda_id = ?",
-            conn,
-            params=(sonda_id_atual,),
-        )
-        df_sondas = pd.read_sql_query(
-            "SELECT id, codigo FROM sondas WHERE id = ?",
-            conn,
-            params=(sonda_id_atual,),
-        )
+        df_furos = pd.read_sql_query("SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id WHERE f.sonda_id = ?", conn, params=(sonda_id_atual,))
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,))
     conn.close()
 
-    tab_furos_lista, tab_furo_novo = st.tabs(
-        ["📋 Furos Cadastrados", "➕ Novo Furo"]
-    )
+    tab_furos_lista, tab_furo_novo = st.tabs(["📋 Furos Cadastrados", "➕ Novo Furo"])
 
     with tab_furos_lista:
         if not df_furos.empty:
@@ -1138,40 +959,32 @@ elif opcao == "📍 Controle de Furos":
     with tab_furo_novo:
         if not df_sondas.empty:
             with st.container(border=True):
+                st.subheader("Cadastrar Novo Furo")
+                
+                st.markdown("##### 🛰️ Obter Coordenadas via GPS")
+                location = streamlit_geolocation()
+                lat_gps = location.get("latitude") if location else None
+                lon_gps = location.get("longitude") if location else None
+                
+                utm_e_calc, utm_n_calc, _ = latlon_to_utm(lat_gps, lon_gps)
+
                 with st.form("form_furo", clear_on_submit=True):
-                    st.subheader("Cadastrar Novo Furo")
-                    c1, c2 = st.columns(2)
-                    id_furo = c1.text_input("Identificação do Furo (ex: F-01)")
-                    sonda_furo = c2.selectbox(
-                        "Sonda Responsável", df_sondas["codigo"].tolist()
-                    )
+                    c1, c2, c3 = st.columns(3)
+                    furo_id = c1.text_input("Identificação do Furo (ex: FSD-01)")
+                    sonda_furo = c2.selectbox("Sonda Responsável", df_sondas["codigo"].tolist())
+                    sonda_furo_id = df_sondas[df_sondas["codigo"] == sonda_furo]["id"].values[0]
+                    situacao = c3.selectbox("Situação Inicial", ["Planejado", "Em Andamento", "Concluído", "Cancelado"])
 
-                    c3, c4, c5 = st.columns(3)
-                    coord_e = c3.number_input("Coordenada E (UTM)", value=0.0)
-                    coord_n = c4.number_input("Coordenada N (UTM)", value=0.0)
-                    cota = c5.number_input("Cota (m)", value=0.0)
+                    c4, c5, c6 = st.columns(3)
+                    coord_e = c4.number_input("Coordenada Este (UTM)", value=float(utm_e_calc), format="%.2f")
+                    coord_n = c5.number_input("Coordenada Norte (UTM)", value=float(utm_n_calc), format="%.2f")
+                    cota = c6.number_input("Cota (m)", value=0.0, step=0.5)
 
-                    c6, c7 = st.columns(2)
-                    prof_plan = c6.number_input(
-                        "Profundidade Planejada (m)", min_value=0.0, step=1.0
-                    )
-                    situacao = c7.selectbox(
-                        "Situação",
-                        ["Planejado", "Em Andamento", "Concluído", "Cancelado"],
-                    )
+                    prof_plan = st.number_input("Profundidade Planejada (m)", min_value=1.0, step=1.0)
 
-                    btn_salvar_furo = st.form_submit_button(
-                        "Cadastrar Furo",
-                        type="primary",
-                        use_container_width=True,
-                    )
+                    btn_salvar_furo = st.form_submit_button("Cadastrar Furo", type="primary", use_container_width=True)
 
-                    if btn_salvar_furo and id_furo:
-                        s_id = int(
-                            df_sondas[df_sondas["codigo"] == sonda_furo][
-                                "id"
-                            ].values[0]
-                        )
+                    if btn_salvar_furo and furo_id:
                         conn = get_connection()
                         cursor = conn.cursor()
                         try:
@@ -1180,312 +993,162 @@ elif opcao == "📍 Controle de Furos":
                                 INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada, situacao)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
                                 """,
-                                (
-                                    id_furo,
-                                    s_id,
-                                    coord_e,
-                                    coord_n,
-                                    cota,
-                                    prof_plan,
-                                    situacao,
-                                ),
+                                (furo_id, int(sonda_furo_id), coord_e, coord_n, cota, prof_plan, situacao)
                             )
                             conn.commit()
-                            st.success(f"Furo '{id_furo}' cadastrado!")
+                            st.success(f"Furo '{furo_id}' cadastrado com sucesso!")
                             st.rerun()
                         except sqlite3.IntegrityError:
-                            st.error("Este ID de furo já existe.")
+                            st.error("Já existe um furo cadastrado com este ID.")
                         finally:
                             conn.close()
 
 # ------------------------------------------------------------------------------
-# 6. GESTÃO DE USUÁRIOS (ADMINISTRADOR)
+# 5. BOLETIM GEOLÓGICO
 # ------------------------------------------------------------------------------
-elif opcao == "👥 Gestão de Usuários":
-    st.title("👥 Gestão de Usuários e Acessos")
-    st.caption(
-        "Cadastro de operadores, geólogos e controle de permissões por sonda."
-    )
+elif opcao == "⛏️ Boletim Geológico":
+    st.title("⛏️ Boletim Geológico / Descrição de Testemunhos")
+    st.caption("Registro de manobras, recuperação, RQD, descrição litológica e envio de fotos.")
     st.markdown("---")
 
     conn = get_connection()
-    df_usuarios = pd.read_sql_query(
-        """
-        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada 
-        FROM usuarios u 
-        LEFT JOIN sondas s ON u.sonda_id = s.id
-    """,
-        conn,
-    )
-    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    if perfil_atual == "Admin":
+        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+        df_boletim = pd.read_sql_query("SELECT * FROM boletim_geologico ORDER BY furo_id, de_m ASC", conn)
+    else:
+        df_furos = pd.read_sql_query("SELECT id FROM furos WHERE sonda_id = ?", conn, params=(sonda_id_atual,))
+        df_boletim = pd.read_sql_query(
+            "SELECT bg.* FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC",
+            conn,
+            params=(sonda_id_atual,),
+        )
     conn.close()
 
-    tab_usr_lista, tab_usr_novo = st.tabs(
-        ["📋 Usuários Cadastrados", "➕ Novo Usuário"]
-    )
+    tab_geo_lista, tab_geo_novo = st.tabs(["📋 Registros Geológicos", "➕ Novo Registro Geológico"])
 
-    with tab_usr_lista:
-        if not df_usuarios.empty:
-            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+    with tab_geo_lista:
+        if not df_boletim.empty:
+            st.dataframe(df_boletim, use_container_width=True, hide_index=True)
         else:
-            st.info("Nenhum usuário cadastrado.")
+            st.info("Nenhum registro geológico encontrado.")
 
-    with tab_usr_novo:
-        with st.container(border=True):
-            with st.form("form_novo_usuario", clear_on_submit=True):
-                st.subheader("Criar Novo Usuário")
-                c1, c2 = st.columns(2)
-                novo_usuario = c1.text_input("Nome de Usuário (Login)")
-                nova_senha = c2.text_input("Senha", type="password")
-
-                c3, c4 = st.columns(2)
-                novo_perfil = c3.selectbox(
-                    "Perfil de Acesso", ["Admin", "Geólogo", "Operador"]
-                )
-
-                sondas_lista = ["Nenhuma (Acesso Total)"] + df_sondas[
-                    "codigo"
-                ].tolist()
-                sonda_selecionada = c4.selectbox(
-                    "Vincular à Sonda Especifica", sondas_lista
-                )
-
-                btn_criar_usr = st.form_submit_button(
-                    "Cadastrar Usuário",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-                if btn_criar_usr and novo_usuario and nova_senha:
-                    s_id = None
-                    if (
-                        sonda_selecionada != "Nenhuma (Acesso Total)"
-                        and not df_sondas.empty
-                    ):
-                        s_id = int(
-                            df_sondas[df_sondas["codigo"] == sonda_selecionada][
-                                "id"
-                            ].values[0]
-                        )
-
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute(
-                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
-                            (
-                                novo_usuario,
-                                hash_senha(nova_senha),
-                                novo_perfil,
-                                s_id,
-                            ),
-                        )
-                        conn.commit()
-                        st.success(
-                            f"Usuário '{novo_usuario}' criado com sucesso!"
-                        )
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Este nome de usuário já existe.")
-                    finally:
-                        conn.close()
-
-# ------------------------------------------------------------------------------
-# 6. GESTÃO DE USUÁRIOS (ADMINISTRADOR)
-# ------------------------------------------------------------------------------
-elif opcao == "👥 Gestão de Usuários":
-    st.title("👥 Gestão de Usuários e Acessos")
-    st.caption(
-        "Cadastro de operadores, geólogos e controle de permissões por sonda."
-    )
-    st.markdown("---")
-
-    conn = get_connection()
-    df_usuarios = pd.read_sql_query(
-        """
-        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada 
-        FROM usuarios u 
-        LEFT JOIN sondas s ON u.sonda_id = s.id
-    """,
-        conn,
-    )
-    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
-    conn.close()
-
-    tab_usr_lista, tab_usr_novo, tab_usr_editar, tab_usr_excluir = st.tabs(
-        [
-            "📋 Usuários Cadastrados",
-            "➕ Novo Usuário",
-            "✏️ Editar Permissão",
-            "🗑️ Excluir Usuário",
-        ]
-    )
-
-    # 1. LISTAGEM
-    with tab_usr_lista:
-        if not df_usuarios.empty:
-            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum usuário cadastrado.")
-
-    # 2. NOVO USUÁRIO
-    with tab_usr_novo:
-        with st.container(border=True):
-            with st.form("form_novo_usuario", clear_on_submit=True):
-                st.subheader("Criar Novo Usuário")
-                c1, c2 = st.columns(2)
-                novo_usuario = c1.text_input("Nome de Usuário (Login)")
-                nova_senha = c2.text_input("Senha", type="password")
-
-                c3, c4 = st.columns(2)
-                novo_perfil = c3.selectbox(
-                    "Perfil de Acesso", ["Admin", "Geólogo", "Operador"]
-                )
-
-                sondas_lista = ["Nenhuma (Acesso Total)"] + (
-                    df_sondas["codigo"].tolist() if not df_sondas.empty else []
-                )
-                sonda_selecionada = c4.selectbox(
-                    "Vincular à Sonda Específica", sondas_lista
-                )
-
-                btn_criar_usr = st.form_submit_button(
-                    "Cadastrar Usuário",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-                if btn_criar_usr and novo_usuario and nova_senha:
-                    s_id = None
-                    if (
-                        sonda_selecionada != "Nenhuma (Acesso Total)"
-                        and not df_sondas.empty
-                    ):
-                        s_id = int(
-                            df_sondas[df_sondas["codigo"] == sonda_selecionada][
-                                "id"
-                            ].values[0]
-                        )
-
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute(
-                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
-                            (
-                                novo_usuario,
-                                hash_senha(nova_senha),
-                                novo_perfil,
-                                s_id,
-                            ),
-                        )
-                        conn.commit()
-                        st.success(
-                            f"Usuário '{novo_usuario}' criado com sucesso!"
-                        )
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Este nome de usuário já existe.")
-                    finally:
-                        conn.close()
-
-    # 3. EDITAR PERMISSÃO / SONDA VINCULADA
-    with tab_usr_editar:
-        if not df_usuarios.empty:
+    with tab_geo_novo:
+        if not df_furos.empty:
             with st.container(border=True):
-                with st.form("form_edit_usuario"):
-                    st.subheader("Alterar Perfil ou Vínculo de Sonda")
-                    usr_sel = st.selectbox(
-                        "Selecione o Usuário", df_usuarios["usuario"].tolist()
-                    )
-                    dados_usr = df_usuarios[
-                        df_usuarios["usuario"] == usr_sel
-                    ].iloc[0]
+                st.subheader("Novo Registro de Testemunho de Sondagem")
+                
+                furo_geo_id = st.selectbox("Selecione o Furo", df_furos["id"].tolist())
+                
+                c1, c2 = st.columns(2)
+                de_m = c1.number_input("De (m)", min_value=0.0, step=0.1)
+                ate_m = c2.number_input("Até (m)", min_value=0.0, step=0.1)
 
-                    c1, c2 = st.columns(2)
-                    edit_perfil = c1.selectbox(
-                        "Novo Perfil",
-                        ["Admin", "Geólogo", "Operador"],
-                        index=["Admin", "Geólogo", "Operador"].index(
-                            dados_usr["perfil"]
-                        ),
-                    )
+                c3, c4 = st.columns(2)
+                rec_m = c3.number_input("Recuperação (m)", min_value=0.0, step=0.01)
+                rqd_m = c4.number_input("RQD (m)", min_value=0.0, step=0.01)
 
-                    sondas_lista = ["Nenhuma (Acesso Total)"] + (
-                        df_sondas["codigo"].tolist()
-                        if not df_sondas.empty
-                        else []
-                    )
-                    idx_sonda = 0
-                    if (
-                        dados_usr["sonda_vinculada"]
-                        and dados_usr["sonda_vinculada"] in sondas_lista
-                    ):
-                        idx_sonda = sondas_lista.index(
-                            dados_usr["sonda_vinculada"]
-                        )
+                c5, c6 = st.columns(2)
+                litologia = c5.text_input("Litologia / Tipo de Solo/Rocha")
+                n_amostra = c6.text_input("Nº da Amostra")
 
-                    edit_sonda = c2.selectbox(
-                        "Nova Sonda Vinculada",
-                        sondas_lista,
-                        index=idx_sonda,
-                    )
+                desc_geo = st.text_area("Descrição Geológica Detalhada")
+                obs = st.text_input("Observações")
+                
+                foto_upload = st.file_uploader("Foto da Caixa de Testemunho", type=["jpg", "jpeg", "png"])
 
-                    btn_edit_usr = st.form_submit_button(
-                        "Atualizar Permissões",
-                        type="primary",
-                        use_container_width=True,
-                    )
-
-                    if btn_edit_usr:
-                        s_id = None
-                        if (
-                            edit_sonda != "Nenhuma (Acesso Total)"
-                            and not df_sondas.empty
-                        ):
-                            s_id = int(
-                                df_sondas[df_sondas["codigo"] == edit_sonda][
-                                    "id"
-                                ].values[0]
-                            )
+                if st.button("Salvar Registro Geológico", type="primary", use_container_width=True):
+                    if ate_m <= de_m:
+                        st.error("O valor 'Até (m)' deve ser maior que 'De (m)'.")
+                    else:
+                        foto_url = None
+                        if foto_upload:
+                            foto_url = upload_foto_supabase(foto_upload, foto_upload.name)
 
                         conn = get_connection()
                         cursor = conn.cursor()
                         cursor.execute(
-                            "UPDATE usuarios SET perfil = ?, sonda_id = ? WHERE id = ?",
-                            (edit_perfil, s_id, int(dados_usr["id"])),
+                            """
+                            INSERT INTO boletim_geologico 
+                            (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (furo_geo_id, de_m, ate_m, rec_m, rqd_m, litologia, desc_geo, n_amostra, obs, foto_url)
                         )
                         conn.commit()
                         conn.close()
-                        st.success(
-                            f"Permissões de '{usr_sel}' atualizadas com sucesso!"
-                        )
-                        st.rerun()
 
-    # 4. EXCLUIR USUÁRIO
-    with tab_usr_excluir:
-        if not df_usuarios.empty:
-            usuarios_para_deletar = df_usuarios[
-                df_usuarios["usuario"] != st.session_state.get("usuario")
-            ]
-            if not usuarios_para_deletar.empty:
-                usr_del = st.selectbox(
-                    "Selecione o Usuário para Remover",
-                    usuarios_para_deletar["usuario"].tolist(),
-                )
-                if st.button(
-                    "Confirmar Exclusão de Usuário", type="primary"
-                ):
+                        # Grava em paralelo no Supabase PostgreSQL se configurado
+                        salvar_boletim_supabase({
+                            "furo_id": furo_geo_id,
+                            "de_m": de_m,
+                            "ate_m": ate_m,
+                            "recuperacao_m": rec_m,
+                            "rqd_m": rqd_m,
+                            "litologia": litologia,
+                            "descricao_geologica": desc_geo,
+                            "n_amostra": n_amostra,
+                            "observacoes": obs,
+                            "foto_url": foto_url
+                        })
+
+                        st.success("Registro geológico inserido com sucesso!")
+                        st.rerun()
+        else:
+            st.warning("Cadastre furos antes de adicionar informações no boletim geológico.")
+
+# ------------------------------------------------------------------------------
+# 6. GESTÃO DE USUÁRIOS (APENAS ADMIN)
+# ------------------------------------------------------------------------------
+elif opcao == "👥 Gestão de Usuários" and perfil_atual == "Admin":
+    st.title("👥 Controle de Acesso e Perfil de Usuários")
+    st.caption("Administração de privilégios e associação de usuários a sondas específicas.")
+    st.markdown("---")
+
+    conn = get_connection()
+    df_usuarios = pd.read_sql_query(
+        "SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_associada FROM usuarios u LEFT JOIN sondas s ON u.sonda_id = s.id",
+        conn
+    )
+    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    conn.close()
+
+    tab_usr_lista, tab_usr_novo = st.tabs(["📋 Usuários Cadastrados", "➕ Criar Novo Usuário"])
+
+    with tab_usr_lista:
+        st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+
+    with tab_usr_novo:
+        with st.container(border=True):
+            with st.form("form_novo_usuario", clear_on_submit=True):
+                st.subheader("Novo Usuário do Sistema")
+                c1, c2 = st.columns(2)
+                novo_user = c1.text_input("Nome de Usuário")
+                nova_senha = c2.text_input("Senha", type="password")
+
+                c3, c4 = st.columns(2)
+                novo_perfil = c3.selectbox("Perfil de Acesso", ["Admin", "Geólogo", "Operador"])
+                
+                lista_sondas = ["Todas (Acesso Geral)"] + df_sondas["codigo"].tolist()
+                sonda_vinc = c4.selectbox("Sonda Vinculada (Restrição de acesso)", lista_sondas)
+
+                btn_criar_usr = st.form_submit_button("Cadastrar Usuário", type="primary", use_container_width=True)
+
+                if btn_criar_usr and novo_user and nova_senha:
+                    s_id = None
+                    if sonda_vinc != "Todas (Acesso Geral)":
+                        s_id = df_sondas[df_sondas["codigo"] == sonda_vinc]["id"].values[0]
+
                     conn = get_connection()
                     cursor = conn.cursor()
-                    cursor.execute(
-                        "DELETE FROM usuarios WHERE usuario = ?", (usr_del,)
-                    )
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Usuário '{usr_del}' removido!")
-                    st.rerun()
-            else:
-                st.info(
-                    "Você não pode excluir o próprio usuário que está logado."
-                )
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (novo_user, hash_senha(nova_senha), novo_perfil, int(s_id) if s_id else None)
+                        )
+                        conn.commit()
+                        st.success(f"Usuário '{novo_user}' criado com sucesso!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Nome de usuário já existe.")
+                    finally:
+                        conn.close()
