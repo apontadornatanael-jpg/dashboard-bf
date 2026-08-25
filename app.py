@@ -549,7 +549,7 @@ elif opcao == "Apontamento Diário":
             st.warning("É necessário possuir furos e sondas vinculados para registrar o apontamento.")
 
 # ------------------------------------------------------------------------------
-# 4. CONTROLE DE FUROS
+# 4. CONTROLE DE FUROS (COM CAPTURA DE GPS AUTOMÁTICO)
 # ------------------------------------------------------------------------------
 elif opcao == "Controle de Furos":
     st.title("Controle de Furos de Sondagem")
@@ -574,15 +574,42 @@ elif opcao == "Controle de Furos":
 
     with tab_furos_novo:
         if not df_sondas.empty:
+            st.subheader("Captura de Localização via GPS")
+            st.caption("Clique no botão abaixo para capturar as coordenadas exatas de onde você está no campo:")
+            
+            # Captura a localização atual via navegador/dispositivo
+            location = streamlit_geolocation()
+
+            lat_auto = location.get("latitude") if location else None
+            lon_auto = location.get("longitude") if location else None
+            alt_auto = location.get("altitude") if location else None
+
+            if lat_auto and lon_auto:
+                st.success(f"📍 Coordenadas capturadas: Lat {lat_auto:.6f}, Lon {lon_auto:.6f}")
+            else:
+                st.info("Clique no ícone de GPS acima para obter as coordenadas automaticamente ou preencha manualmente.")
+
             with st.form("form_furo", clear_on_submit=True):
                 c1, c2 = st.columns(2)
                 furo_id = c1.text_input("Identificação do Furo (ex: F-01)")
                 sonda_sel = c2.selectbox("Sonda Responsável", df_sondas["codigo"].tolist())
 
                 c3, c4, c5 = st.columns(3)
-                coord_e = c3.number_input("Coordenada Easting (E)", step=0.01)
-                coord_n = c4.number_input("Coordenada Northing (N)", step=0.01)
-                cota = c5.number_input("Cota (Z)", step=0.01)
+                coord_e = c3.number_input(
+                    "Longitude / Easting", 
+                    value=float(lon_auto) if lon_auto is not None else 0.0, 
+                    format="%.6f"
+                )
+                coord_n = c4.number_input(
+                    "Latitude / Northing", 
+                    value=float(lat_auto) if lat_auto is not None else 0.0, 
+                    format="%.6f"
+                )
+                cota = c5.number_input(
+                    "Cota / Altitude (Z)", 
+                    value=float(alt_auto) if alt_auto is not None else 0.0, 
+                    format="%.2f"
+                )
 
                 c6, c7 = st.columns(2)
                 prof_plan = c6.number_input("Prof. Planejada (m)", min_value=0.0, step=1.0)
