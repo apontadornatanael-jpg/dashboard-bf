@@ -5,3 +5,4 @@ requests
 pillow
 supabase
 sqlite3-api
+streamlit-geolocation
