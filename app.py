@@ -1,828 +1,1750 @@
-import os
-import sqlite3
+import base64
+
 import hashlib
+
+import io
+
 import math
-import pandas as pd
-import streamlit as st
+
+import sqlite3
+
+import uuid
+
 from datetime import date
+
+
+
+import openpyxl
+
+import pandas as pd
+
+import streamlit as st
+
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+from openpyxl.utils import get_column_letter
+
 from streamlit_geolocation import streamlit_geolocation
-from supabase import create_client, Client
+
+
+
+# MÓDULO SUPABASE
+
+from supabase import Client, create_client
+
+
+
+# IMPORTAÇÃO DOS MÓDULOS CUSTOMIZADOS
+
 from ui_components import aplicar_estilo_customizado, render_kpi_card
 
-# ------------------------------------------------------------------------------
-# 1. CONFIGURAÇÃO DA PÁGINA E ESTILOS
-# ------------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Gestão de Sondagem & Geologia",
-    page_icon="⛏️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+
+
+# ==============================================================================
+
+# INICIALIZAÇÃO DA APLICAÇÃO E SESSION STATE (EVITA KEYERROR)
+
+# ==============================================================================
+
+
+
+st.set_page_config(page_title="Central de Controle - Sondagem", layout="wide")
+
+
+
+# Garantir que todas as chaves de sessão existam antes de qualquer leitura
+
+if "autenticado" not in st.session_state:
+
+    st.session_state["autenticado"] = False
+
+if "usuario" not in st.session_state:
+
+    st.session_state["usuario"] = ""
+
+if "perfil" not in st.session_state:
+
+    st.session_state["perfil"] = ""
+
+if "sonda_id" not in st.session_state:
+
+    st.session_state["sonda_id"] = None
+
+
+
+# ==============================================================================
+
+# CONEXÃO E CONFIGURAÇÃO DO SUPABASE
+
+# ==============================================================================
+
+
+
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://seu-projeto.supabase.co")
+
+SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sua-chave-aqui")
+
+
+
+
+
+@st.cache_resource
+
+def get_supabase_client() -> Client:
+
+    """Inicializa e retorna a conexão com o Supabase."""
+
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+
+
+
+def upload_foto_supabase(file_buffer, nome_arquivo):
+
+    """Envia uma imagem para o Supabase Storage e retorna a URL pública."""
+
+    try:
+
+        supabase = get_supabase_client()
+
+        bucket_name = "boletins-fotos"
+
+
+
+        # Gera nome único para evitar sobrescrever arquivos
+
+        ext = nome_arquivo.split(".")[-1]
+
+        caminho_storage = f"boletins/{uuid.uuid4().hex}.{ext}"
+
+
+
+        # Upload para o Storage
+
+        supabase.storage.from_(bucket_name).upload(
+
+            caminho_storage,
+
+            file_buffer.getvalue(),
+
+            file_options={"content-type": f"image/{ext}"},
+
+        )
+
+
+
+        # Retorna URL pública do arquivo
+
+        public_url = supabase.storage.from_(bucket_name).get_public_url(
+
+            caminho_storage
+
+        )
+
+        return public_url
+
+    except Exception as e:
+
+        st.error(f"Erro ao enviar imagem para o Supabase Storage: {e}")
+
+        return None
+
+
+
+
+
+def salvar_boletim_supabase(dados_boletim):
+
+    """Insere o registro do boletim geológico no banco PostgreSQL do Supabase."""
+
+    try:
+
+        supabase = get_supabase_client()
+
+        response = (
+
+            supabase.table("boletim_geologico").insert(dados_boletim).execute()
+
+        )
+
+        return response
+
+    except Exception as e:
+
+        st.error(f"Erro ao salvar boletim no Supabase: {e}")
+
+        return None
+
+
+
+
+
+# ==============================================================================
+
+# AUTENTICAÇÃO E GESTÃO DE USUÁRIOS (RBAC) & BANCO LOCAL SQLITE
+
+# ==============================================================================
+
+
+
+
+
+def hash_senha(senha):
+
+    return hashlib.sha256(senha.encode()).hexdigest()
+
+
+
+
+
+def get_connection():
+
+    return sqlite3.connect("central_sondagem.db")
+
+
+
+
+
+def criar_tabela_usuarios():
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS sondas (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            codigo TEXT UNIQUE NOT NULL,
+
+            equipe TEXT NOT NULL,
+
+            projeto TEXT NOT NULL,
+
+            status TEXT CHECK(status IN ('Operando', 'Parada', 'Manutenção')) DEFAULT 'Operando'
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS usuarios (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            usuario TEXT UNIQUE NOT NULL,
+
+            senha TEXT NOT NULL,
+
+            perfil TEXT CHECK(perfil IN ('Admin', 'Geólogo', 'Operador')) NOT NULL,
+
+            sonda_id INTEGER,
+
+            FOREIGN KEY(sonda_id) REFERENCES sondas(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS furos (
+
+            id TEXT PRIMARY KEY,
+
+            sonda_id INTEGER,
+
+            coord_e REAL,
+
+            coord_n REAL,
+
+            cota REAL,
+
+            prof_planejada REAL,
+
+            prof_executada REAL DEFAULT 0,
+
+            situacao TEXT CHECK(situacao IN ('Planejado', 'Em Andamento', 'Concluído', 'Cancelado')) DEFAULT 'Planejado',
+
+            FOREIGN KEY(sonda_id) REFERENCES sondas(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS producao_diaria (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            data DATE NOT NULL,
+
+            sonda_id INTEGER,
+
+            furo_id TEXT,
+
+            prof_inicial REAL NOT NULL,
+
+            prof_final REAL NOT NULL,
+
+            horas_trabalhadas REAL NOT NULL,
+
+            horas_paradas REAL DEFAULT 0,
+
+            motivo_parada TEXT,
+
+            FOREIGN KEY(sonda_id) REFERENCES sondas(id),
+
+            FOREIGN KEY(furo_id) REFERENCES furos(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("""
+
+        CREATE TABLE IF NOT EXISTS boletim_geologico (
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            furo_id TEXT NOT NULL,
+
+            de_m REAL NOT NULL,
+
+            ate_m REAL NOT NULL,
+
+            recuperacao_m REAL NOT NULL,
+
+            rqd_m REAL NOT NULL,
+
+            litologia TEXT NOT NULL,
+
+            descricao_geologica TEXT,
+
+            n_amostra TEXT,
+
+            observacoes TEXT,
+
+            foto_url TEXT,
+
+            FOREIGN KEY(furo_id) REFERENCES furos(id)
+
+        )
+
+    """)
+
+
+
+    cursor.execute("SELECT COUNT(*) FROM usuarios")
+
+    if cursor.fetchone()[0] == 0:
+
+        cursor.execute(
+
+            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, NULL)",
+
+            ("admin", hash_senha("admin123"), "Admin"),
+
+        )
+
+
+
+    conn.commit()
+
+    conn.close()
+
+
+
+
+
+def verificar_login(usuario, senha):
+
+    conn = get_connection()
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+
+        "SELECT perfil, sonda_id FROM usuarios WHERE usuario = ? AND senha = ?",
+
+        (usuario, hash_senha(senha)),
+
+    )
+
+    resultado = cursor.fetchone()
+
+    conn.close()
+
+    return resultado if resultado else None
+
+
+
+
+
+def tela_login():
+
+    criar_tabela_usuarios()
+
+
+
+    if not st.session_state.get("autenticado", False):
+
+        col1, col2, col3 = st.columns([1, 2, 1])
+
+        with col2:
+
+            st.subheader("🔐 Acesso ao Sistema")
+
+            usuario = st.text_input("Usuário")
+
+            senha = st.text_input("Senha", type="password")
+
+
+
+            if st.button("Entrar", type="primary", use_container_width=True):
+
+                login_info = verificar_login(usuario, senha)
+
+                if login_info:
+
+                    st.session_state["autenticado"] = True
+
+                    st.session_state["usuario"] = usuario
+
+                    st.session_state["perfil"] = login_info[0]
+
+                    st.session_state["sonda_id"] = login_info[1]
+
+                    st.success("Login realizado com sucesso!")
+
+                    st.rerun()
+
+                else:
+
+                    st.error("Usuário ou senha incorretos.")
+
+        return False
+
+    return True
+
+
+
+
+
+def botao_logout():
+
+    st.sidebar.markdown(
+
+        f"👤 **{st.session_state.get('usuario', '')}** ({st.session_state.get('perfil', '')})"
+
+    )
+
+    if st.sidebar.button("Sair / Logout"):
+
+        st.session_state["autenticado"] = False
+
+        st.session_state["usuario"] = ""
+
+        st.session_state["perfil"] = ""
+
+        st.session_state["sonda_id"] = None
+
+        st.rerun()
+
+
+
+
+
+# ==============================================================================
+
+# UTILITÁRIOS E EXPORTAÇÃO EXCEL
+
+# ==============================================================================
+
+
+
+
+
+def latlon_to_utm(lat, lon):
+
+    if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
+
+        return 0.0, 0.0, 0
+
+    a = 6378137.0
+
+    f = 1 / 298.257223563
+
+    b = a * (1 - f)
+
+    e_sq = (a**2 - b**2) / (a**2)
+
+    k0 = 0.9996
+
+    zone_number = int((lon + 180) / 6) + 1
+
+    lon0 = (zone_number - 1) * 6 - 180 + 3
+
+    lat_rad = math.radians(lat)
+
+    lon_rad = math.radians(lon)
+
+    lon0_rad = math.radians(lon0)
+
+    N = a / math.sqrt(1 - e_sq * math.sin(lat_rad) ** 2)
+
+    T = math.tan(lat_rad) ** 2
+
+    C = (e_sq / (1 - e_sq)) * math.cos(lat_rad) ** 2
+
+    A = (lon_rad - lon0_rad) * math.cos(lat_rad)
+
+    M = a * (
+
+        (1 - e_sq / 4 - 3 * e_sq**2 / 64 - 5 * e_sq**3 / 256) * lat_rad
+
+        - (3 * e_sq / 8 + 3 * e_sq**2 / 32 + 45 * e_sq**3 / 1024)
+
+        * math.sin(2 * lat_rad)
+
+        + (15 * e_sq**2 / 256 + 45 * e_sq**3 / 1024) * math.sin(4 * lat_rad)
+
+        - (35 * e_sq**3 / 3072) * math.sin(6 * lat_rad)
+
+    )
+
+    easting = (
+
+        k0
+
+        * N
+
+        * (
+
+            A
+
+            + (1 - T + C) * A**3 / 6
+
+            + (5 - 18 * T + T**2 + 72 * C - 58 * (e_sq / (1 - e_sq)))
+
+            * A**5
+
+            / 120
+
+        )
+
+        + 500000.0
+
+    )
+
+    northing = k0 * (
+
+        M
+
+        + N
+
+        * math.tan(lat_rad)
+
+        * (
+
+            A**2 / 2
+
+            + (5 - T + 9 * C + 4 * C**2) * A**4 / 24
+
+            + (61 - 58 * T + T**2 + 600 * C - 330 * (e_sq / (1 - e_sq)))
+
+            * A**6
+
+            / 720
+
+        )
+
+    )
+
+    if lat < 0:
+
+        northing += 10000000.0
+
+    return round(easting, 2), round(northing, 2), zone_number
+
+
+
+
+
+def add_bg_from_local(image_file):
+
+    try:
+
+        with open(image_file, "rb") as image:
+
+            encoded_string = base64.b64encode(image.read())
+
+        st.markdown(
+
+            f"""
+
+            <style>
+
+            .stApp {{
+
+                background-image: url("data:image/png;base64,{encoded_string.decode()}");
+
+                background-size: cover; background-position: center;
+
+                background-repeat: no-repeat; background-attachment: fixed;
+
+            }}
+
+            </style>
+
+            """,
+
+            unsafe_allow_html=True,
+
+        )
+
+    except FileNotFoundError:
+
+        pass
+
+
+
+
+
+def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
+
+    output = io.BytesIO()
+
+    wb = openpyxl.Workbook()
+
+
+
+    cor_cabecalho = PatternFill(
+
+        start_color="1F4E79", end_color="1F4E79", fill_type="solid"
+
+    )
+
+    cor_titulo = PatternFill(
+
+        start_color="1B365D", end_color="1B365D", fill_type="solid"
+
+    )
+
+    cor_card = PatternFill(
+
+        start_color="F2F4F7", end_color="F2F4F7", fill_type="solid"
+
+    )
+
+    cor_zebra = PatternFill(
+
+        start_color="F9FAFB", end_color="F9FAFB", fill_type="solid"
+
+    )
+
+
+
+    fonte_titulo = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+
+    fonte_cabecalho = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+
+    fonte_card_num = Font(name="Calibri", size=14, bold=True, color="1F4E79")
+
+    fonte_card_lbl = Font(name="Calibri", size=9, italic=True, color="595959")
+
+    fonte_dados = Font(name="Calibri", size=10)
+
+
+
+    borda_fina = Side(border_style="thin", color="D9D9D9")
+
+    borda_caixa = Border(
+
+        left=borda_fina, right=borda_fina, top=borda_fina, bottom=borda_fina
+
+    )
+
+
+
+    conn = get_connection()
+
+
+
+    if perfil_usuario == "Admin":
+
+        df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+
+        df_prod = pd.read_sql_query(
+
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id",
+
+            conn,
+
+        )
+
+        df_geo = pd.read_sql_query(
+
+            """
+
+            SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
+
+                   ROUND((recuperacao_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as recuperacao_pct,
+
+                   rqd_m, ROUND((rqd_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
+
+            FROM boletim_geologico ORDER BY furo_id, de_m ASC
+
+        """,
+
+            conn,
+
+        )
+
+    else:
+
+        df_sondas = pd.read_sql_query(
+
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(user_sonda_id,)
+
+        )
+
+        df_prod = pd.read_sql_query(
+
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?",
+
+            conn,
+
+            params=(user_sonda_id,),
+
+        )
+
+        df_geo = pd.read_sql_query(
+
+            """
+
+            SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
+
+                   ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as recuperacao_pct,
+
+                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
+
+            FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
+
+        """,
+
+            conn,
+
+            params=(user_sonda_id,),
+
+        )
+
+    conn.close()
+
+
+
+    ws_dash = wb.active
+
+    ws_dash.title = "📌 Dashboard Executivo"
+
+    ws_dash.views.sheetView[0].showGridLines = True
+
+    ws_dash.merge_cells("A1:H1")
+
+    ws_dash["A1"] = "DASHBOARD EXECUTIVO — CONTROLE INTEGRADO DE SONDAGEM"
+
+    ws_dash["A1"].font = fonte_titulo
+
+    ws_dash["A1"].fill = cor_titulo
+
+    ws_dash["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+    ws_dash.row_dimensions[1].height = 40
+
+
+
+    total_sondas = len(df_sondas)
+
+    sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
+
+    total_metros = (
+
+        (df_prod["prof_final"] - df_prod["prof_inicial"]).sum()
+
+        if not df_prod.empty
+
+        else 0.0
+
+    )
+
+    total_hrs_trab = (
+
+        df_prod["horas_trabalhadas"].sum() if not df_prod.empty else 0.0
+
+    )
+
+    total_hrs_par = (
+
+        df_prod["horas_paradas"].sum() if not df_prod.empty else 0.0
+
+    )
+
+    eficiencia = (
+
+        (total_hrs_trab / (total_hrs_trab + total_hrs_par) * 100)
+
+        if (total_hrs_trab + total_hrs_par) > 0
+
+        else 0.0
+
+    )
+
+
+
+    kpis = [
+
+        ("Sondas Operando", f"{sondas_op}/{total_sondas}", "A3:B3", "A4:B4", "A3:B4"),
+
+        ("Metragem Total", f"{total_metros:.1f} m", "D3:E3", "D4:E4", "D3:E4"),
+
+        ("Eficiência Geral", f"{eficiencia:.1f}%", "G3:H3", "G4:H4", "G3:H4"),
+
+    ]
+
+
+
+    for lbl, val, r_lbl, r_val, r_box in kpis:
+
+        ws_dash.merge_cells(r_lbl)
+
+        ws_dash[r_lbl.split(":")[0]] = lbl
+
+        ws_dash[r_lbl.split(":")[0]].font = fonte_card_lbl
+
+        ws_dash[r_lbl.split(":")[0]].alignment = Alignment(horizontal="center")
+
+        ws_dash.merge_cells(r_val)
+
+        ws_dash[r_val.split(":")[0]] = val
+
+        ws_dash[r_val.split(":")[0]].font = fonte_card_num
+
+        ws_dash[r_val.split(":")[0]].alignment = Alignment(horizontal="center")
+
+        for row in ws_dash[r_box]:
+
+            for cell in row:
+
+                cell.fill = cor_card
+
+                cell.border = borda_caixa
+
+
+
+    # Sondas Sheet
+
+    ws_sondas = wb.create_sheet(title="🚜 Sondas & Equipes")
+
+    ws_sondas.views.sheetView[0].showGridLines = True
+
+    headers_sondas = [
+
+        "ID",
+
+        "Código Sonda",
+
+        "Equipe Responsável",
+
+        "Projeto / Frente",
+
+        "Status Atual",
+
+    ]
+
+    for c_idx, h in enumerate(headers_sondas, 1):
+
+        cell = ws_sondas.cell(row=1, column=c_idx, value=h)
+
+        cell.font = fonte_cabecalho
+
+        cell.fill = cor_cabecalho
+
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        cell.border = borda_caixa
+
+    for r_idx, row in df_sondas.iterrows():
+
+        curr_row = r_idx + 2
+
+        values = [
+
+            row["id"],
+
+            row["codigo"],
+
+            row["equipe"],
+
+            row["projeto"],
+
+            row["status"],
+
+        ]
+
+        for c_idx, val in enumerate(values, 1):
+
+            cell = ws_sondas.cell(row=curr_row, column=c_idx, value=val)
+
+            cell.font = fonte_dados
+
+            cell.border = borda_caixa
+
+            if r_idx % 2 == 0:
+
+                cell.fill = cor_zebra
+
+
+
+    # Produção Sheet
+
+    ws_prod = wb.create_sheet(title="📝 Apontamento Diário")
+
+    ws_prod.views.sheetView[0].showGridLines = True
+
+    headers_prod = [
+
+        "Data",
+
+        "Sonda",
+
+        "Furo",
+
+        "Prof. Inicial (m)",
+
+        "Prof. Final (m)",
+
+        "Avanço (m)",
+
+        "Horas Trab.",
+
+        "Horas Paradas",
+
+        "Motivo Parada",
+
+    ]
+
+    for c_idx, h in enumerate(headers_prod, 1):
+
+        cell = ws_prod.cell(row=1, column=c_idx, value=h)
+
+        cell.font = fonte_cabecalho
+
+        cell.fill = cor_cabecalho
+
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        cell.border = borda_caixa
+
+    for r_idx, row in df_prod.iterrows():
+
+        curr_row = r_idx + 2
+
+        avanco = row["prof_final"] - row["prof_inicial"]
+
+        values = [
+
+            row["data"],
+
+            row["sonda_codigo"],
+
+            row["furo_id"],
+
+            row["prof_inicial"],
+
+            row["prof_final"],
+
+            avanco,
+
+            row["horas_trabalhadas"],
+
+            row["horas_paradas"],
+
+            row["motivo_parada"],
+
+        ]
+
+        for c_idx, val in enumerate(values, 1):
+
+            cell = ws_prod.cell(row=curr_row, column=c_idx, value=val)
+
+            cell.font = fonte_dados
+
+            cell.border = borda_caixa
+
+            if r_idx % 2 == 0:
+
+                cell.fill = cor_zebra
+
+
+
+    # Boletim Sheet
+
+    ws_geo = wb.create_sheet(title="⛏️ Boletim Geológico")
+
+    ws_geo.views.sheetView[0].showGridLines = True
+
+    headers_geo = [
+
+        "Furo",
+
+        "De (m)",
+
+        "Até (m)",
+
+        "Avanço (m)",
+
+        "Rec. (m)",
+
+        "Rec. (%)",
+
+        "RQD (m)",
+
+        "RQD (%)",
+
+        "Litologia",
+
+        "Amostra",
+
+        "Descrição Geológica",
+
+        "Observações",
+
+        "URL Foto Supabase",
+
+    ]
+
+    for c_idx, h in enumerate(headers_geo, 1):
+
+        cell = ws_geo.cell(row=1, column=c_idx, value=h)
+
+        cell.font = fonte_cabecalho
+
+        cell.fill = cor_cabecalho
+
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        cell.border = borda_caixa
+
+    for r_idx, row in df_geo.iterrows():
+
+        curr_row = r_idx + 2
+
+        values = [
+
+            row["furo_id"],
+
+            row["de_m"],
+
+            row["ate_m"],
+
+            row["avanco_m"],
+
+            row["recuperacao_m"],
+
+            row["recuperacao_pct"],
+
+            row["rqd_m"],
+
+            row["rqd_pct"],
+
+            row["litologia"],
+
+            row["n_amostra"],
+
+            row["descricao_geologica"],
+
+            row["observacoes"],
+
+            row.get("foto_url", ""),
+
+        ]
+
+        for c_idx, val in enumerate(values, 1):
+
+            cell = ws_geo.cell(row=curr_row, column=c_idx, value=val)
+
+            cell.font = fonte_dados
+
+            cell.border = borda_caixa
+
+            if r_idx % 2 == 0:
+
+                cell.fill = cor_zebra
+
+
+
+    for sheet in wb.worksheets:
+
+        for col in sheet.columns:
+
+            max_len = 0
+
+            col_letter = get_column_letter(col[0].column)
+
+            for cell in col:
+
+                if cell.value:
+
+                    max_len = max(max_len, len(str(cell.value)))
+
+            sheet.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+
+
+    wb.save(output)
+
+    output.seek(0)
+
+    return output
+
+
+
+
+
+# ==============================================================================
+
+# CARREGAMENTO DE ESTILOS E AUTENTICAÇÃO
+
+# ==============================================================================
+
+
+
+add_bg_from_local("logo_empresa.png")
 
 aplicar_estilo_customizado()
 
-# ------------------------------------------------------------------------------
-# 2. CONEXÃO COM SUPABASE E BANCO LOCAL (SQLITE)
-# ------------------------------------------------------------------------------
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-@st.cache_resource
-def get_supabase_client() -> Client:
-    if SUPABASE_URL and SUPABASE_KEY:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
-    return None
 
-supabase = get_supabase_client()
+if not tela_login():
 
-DB_NAME = "sondagem_geologia.db"
-
-def get_connection():
-    conn = sqlite3.connect(DB_NAME)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
-
-def init_db():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Tabela Sondas
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sondas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE NOT NULL,
-            modelo TEXT,
-            status TEXT DEFAULT 'Operacional'
-        )
-    """)
-
-    # Tabela Furos
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS furos (
-            id TEXT PRIMARY KEY,
-            sonda_id INTEGER,
-            coord_e REAL,
-            coord_n REAL,
-            cota REAL,
-            prof_planejada REAL,
-            prof_executada REAL DEFAULT 0.0,
-            situacao TEXT DEFAULT 'Planejado',
-            FOREIGN KEY (sonda_id) REFERENCES sondas(id)
-        )
-    """)
-
-    # Tabela Produção Diária (Apontamento)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS producao_diaria (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            data TEXT NOT NULL,
-            sonda_id INTEGER,
-            furo_id TEXT,
-            prof_inicial REAL,
-            prof_final REAL,
-            horas_trabalhadas REAL,
-            horas_paradas REAL,
-            motivo_parada TEXT,
-            FOREIGN KEY (sonda_id) REFERENCES sondas(id),
-            FOREIGN KEY (furo_id) REFERENCES furos(id)
-        )
-    """)
-
-    # Tabela Boletim Geológico
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS boletim_geologico (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            furo_id TEXT,
-            de_m REAL,
-            ate_m REAL,
-            recuperacao_m REAL,
-            rqd_m REAL,
-            litologia TEXT,
-            descricao_geologica TEXT,
-            n_amostra TEXT,
-            observacoes TEXT,
-            foto_url TEXT,
-            FOREIGN KEY (furo_id) REFERENCES furos(id)
-        )
-    """)
-
-    # Tabela Usuários
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT UNIQUE NOT NULL,
-            senha TEXT NOT NULL,
-            perfil TEXT NOT NULL,
-            sonda_id INTEGER,
-            FOREIGN KEY (sonda_id) REFERENCES sondas(id)
-        )
-    """)
-
-    # Usuário padrão Admin se não existir
-    cursor.execute("SELECT COUNT(*) FROM usuarios")
-    if cursor.fetchone()[0] == 0:
-        admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
-        cursor.execute(
-            "INSERT INTO usuarios (usuario, senha, perfil) VALUES (?, ?, ?)",
-            ("admin", admin_hash, "Admin"),
-        )
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# ------------------------------------------------------------------------------
-# 3. FUNÇÕES UTILITÁRIAS & SUPABASE
-# ------------------------------------------------------------------------------
-def hash_senha(senha: str) -> str:
-    return hashlib.sha256(senha.encode()).hexdigest()
-
-def latlon_to_utm(lat: float, lon: float):
-    """Converte Lat/Lon para UTM aproximado (WGS84)."""
-    zone = int((lon + 180) / 6) + 1
-    lon0 = (zone - 1) * 6 - 180 + 3
-    lat_rad = math.radians(lat)
-    lon_rad = math.radians(lon)
-    lon0_rad = math.radians(lon0)
-
-    easting = 500000 + 6366197.724 * math.cos(lat_rad) * (lon_rad - lon0_rad)
-    northing = 10000000 + 6366197.724 * lat_rad if lat < 0 else 6366197.724 * lat_rad
-    return round(easting, 2), round(northing, 2), zone
-
-def upload_foto_supabase(file_obj, file_name: str) -> str:
-    if not supabase:
-        st.warning("Supabase não configurado. Foto salva apenas localmente (simulação).")
-        return f"local/{file_name}"
-    try:
-        bucket = "testemunhos"
-        content = file_obj.read()
-        file_path = f"fotos/{date.today()}_{file_name}"
-        supabase.storage.from_(bucket).upload(file_path, content, {"content-type": file_obj.type})
-        public_url = supabase.storage.from_(bucket).get_public_url(file_path)
-        return public_url
-    except Exception as e:
-        st.error(f"Erro ao enviar foto para Supabase Storage: {e}")
-        return None
-
-def salvar_boletim_supabase(dados: dict):
-    if supabase:
-        try:
-            supabase.table("boletim_geologico").insert(dados).execute()
-        except Exception as e:
-            st.warning(f"Não foi possível sincronizar com o Supabase Postgres: {e}")
-
-# ------------------------------------------------------------------------------
-# 4. CONTROLE DE SESSÃO & LOGIN
-# ------------------------------------------------------------------------------
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-if "usuario" not in st.session_state:
-    st.session_state["usuario"] = None
-if "perfil" not in st.session_state:
-    st.session_state["perfil"] = None
-if "sonda_id" not in st.session_state:
-    st.session_state["sonda_id"] = None
-
-def login():
-    st.markdown("## 🔑 Acesso ao Sistema")
-    with st.form("form_login"):
-        user_input = st.text_input("Usuário")
-        pass_input = st.text_input("Senha", type="password")
-        btn_login = st.form_submit_button("Entrar", type="primary", use_container_width=True)
-
-        if btn_login:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT usuario, perfil, sonda_id FROM usuarios WHERE usuario = ? AND senha = ?",
-                (user_input, hash_senha(pass_input)),
-            )
-            row = cursor.fetchone()
-            conn.close()
-
-            if row:
-                st.session_state["logged_in"] = True
-                st.session_state["usuario"] = row[0]
-                st.session_state["perfil"] = row[1]
-                st.session_state["sonda_id"] = row[2]
-                st.success(f"Bem-vindo(a), {row[0]}!")
-                st.rerun()
-            else:
-                st.error("Usuário ou senha inválidos.")
-
-if not st.session_state["logged_in"]:
-    login()
     st.stop()
 
+
+
+perfil_atual = st.session_state.get("perfil", "")
+
+sonda_id_atual = st.session_state.get("sonda_id", None)
+
+
+
+# ==============================================================================
+
+# NAVEGAÇÃO STREAMLIT & SIDEBAR
+
+# ==============================================================================
+
+
+
+st.sidebar.title("🛠️ CENTRAL DE CONTROLE")
+
+botao_logout()
+
+st.sidebar.markdown("---")
+
+
+
+opcoes_menu = [
+
+    "📊 Dashboard Geral",
+
+    "🚜 Cadastro de Sondas",
+
+    "📝 Apontamento Diário",
+
+    "📍 Controle de Furos",
+
+    "⛏️ Boletim Geológico",
+
+]
+
+
+
+if perfil_atual == "Admin":
+
+    opcoes_menu.append("👥 Gestão de Usuários")
+
+
+
+opcao = st.sidebar.radio("Navegação", opcoes_menu)
+
+
+
+excel_mestre = gerar_dashboard_excel_completo(perfil_atual, sonda_id_atual)
+
+st.sidebar.markdown("---")
+
+st.sidebar.download_button(
+
+    label="📊 Exportar Planilha Mestra",
+
+    data=excel_mestre,
+
+    file_name=f"Dashboard_Sondagem_{date.today()}.xlsx",
+
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+
+    type="primary",
+
+    use_container_width=True,
+
+)
+
+
+
 # ------------------------------------------------------------------------------
-# 5. SIDEBAR & NAVEGAÇÃO
-# ------------------------------------------------------------------------------
-with st.sidebar:
-    if os.path.exists("logo_empresa.png"):
-        st.image("logo_empresa.png", use_container_width=True)
-    
-    st.title("⛏️ Sondagem App")
-    st.markdown(f"**Usuário:** {st.session_state['usuario']} | **Perfil:** {st.session_state['perfil']}")
-    st.markdown("---")
 
-    opcoes_menu = [
-        "📊 Dashboard Geral",
-        "🚜 Cadastro de Sondas",
-        "📝 Apontamento Diário",
-        "📍 Controle de Furos",
-        "⛏️ Boletim Geológico",
-    ]
-    if st.session_state["perfil"] == "Admin":
-        opcoes_menu.append("👥 Gestão de Usuários")
-
-    opcao = st.radio("Navegação", opcoes_menu)
-
-    st.markdown("---")
-    if st.button("🚪 Sair / Logout", use_container_width=True):
-        st.session_state["logged_in"] = False
-        st.session_state["usuario"] = None
-        st.session_state["perfil"] = None
-        st.session_state["sonda_id"] = None
-        st.rerun()
-
-usuario_atual = st.session_state["usuario"]
-perfil_atual = st.session_state["perfil"]
-sonda_id_atual = st.session_state["sonda_id"]
+# 1. DASHBOARD GERAL
 
 # ------------------------------------------------------------------------------
-# TELA 1. DASHBOARD GERAL
-# ------------------------------------------------------------------------------
+
 if opcao == "📊 Dashboard Geral":
-    st.title("📊 Dashboard Executivo de Sondagem")
-    st.caption("Visão geral de produtividade, metros perfurados e disponibilidade física.")
+
+    st.title("📊 Painel Geral de Operações")
+
+    st.caption("Visão macro da produção e disponibilidade de equipamentos.")
+
     st.markdown("---")
+
+
 
     conn = get_connection()
 
     if perfil_atual == "Admin":
-        df_prod = pd.read_sql_query("SELECT * FROM producao_diaria", conn)
-        df_furos = pd.read_sql_query("SELECT * FROM furos", conn)
+
         df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
-    else:
+
         df_prod = pd.read_sql_query(
-            "SELECT * FROM producao_diaria WHERE sonda_id = ?", conn, params=(sonda_id_atual,)
+
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id",
+
+            conn,
+
         )
-        df_furos = pd.read_sql_query(
-            "SELECT * FROM furos WHERE sonda_id = ?", conn, params=(sonda_id_atual,)
-        )
+
+    else:
+
         df_sondas = pd.read_sql_query(
+
             "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
+
         )
+
+        df_prod = pd.read_sql_query(
+
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?",
+
+            conn,
+
+            params=(sonda_id_atual,),
+
+        )
+
     conn.close()
 
-    # --- TRATAMENTO ANTI-BUG TYPEERROR ---
-    # Converte explicitamente colunas para numéricas e trata valores nulos (NaN / None)
-    total_metros = 0.0
-    total_horas_trab = 0.0
-    total_horas_para = 0.0
-    furos_concluidos = 0
+
+
+    sondas_total = len(df_sondas)
+
+    sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
+
+
 
     if not df_prod.empty:
-        df_prod["prof_final"] = pd.to_numeric(df_prod["prof_final"], errors="coerce").fillna(0.0)
-        df_prod["prof_inicial"] = pd.to_numeric(df_prod["prof_inicial"], errors="coerce").fillna(0.0)
-        df_prod["horas_trabalhadas"] = pd.to_numeric(df_prod["horas_trabalhadas"], errors="coerce").fillna(0.0)
-        df_prod["horas_paradas"] = pd.to_numeric(df_prod["horas_paradas"], errors="coerce").fillna(0.0)
 
-        total_metros = float((df_prod["prof_final"] - df_prod["prof_inicial"]).sum())
-        total_horas_trab = float(df_prod["horas_trabalhadas"].sum())
-        total_horas_para = float(df_prod["horas_paradas"].sum())
+        metros_hoje = (
 
-    if not df_furos.empty:
-        furos_concluidos = int((df_furos["situacao"] == "Concluído").sum())
+            df_prod[df_prod["data"] == str(date.today())]["prof_final"].sum()
 
-    # Renderização dos KPIs
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        render_kpi_card("Metros Perfurados", f"{total_metros:.1f} m", "📏")
-    with c2:
-        render_kpi_card("Horas Trabalhadas", f"{total_horas_trab:.1f} h", "⏱️")
-    with c3:
-        render_kpi_card("Horas Paradas", f"{total_horas_para:.1f} h", "⚠️")
-    with c4:
-        render_kpi_card("Furos Concluídos", f"{furos_concluidos}", "✅")
+            - df_prod[df_prod["data"] == str(date.today())]["prof_inicial"].sum()
 
-    st.markdown("---")
-    if not df_prod.empty:
-        col_graf1, col_graf2 = st.columns(2)
-        with col_graf1:
-            st.subheader("Avanço Diário (m)")
-            df_prod["avanço"] = df_prod["prof_final"] - df_prod["prof_inicial"]
-            df_diario = df_prod.groupby("data")["avanço"].sum().reset_index()
-            st.bar_chart(df_diario.set_index("data"))
-        with col_graf2:
-            st.subheader("Distribuição de Horas")
-            df_horas = pd.DataFrame({
-                "Tipo": ["Trabalhadas", "Paradas"],
-                "Horas": [total_horas_trab, total_horas_para]
-            })
-            st.bar_chart(df_horas.set_index("Tipo"))
+        )
+
+        metros_acumulados = (df_prod["prof_final"] - df_prod["prof_inicial"]).sum()
+
+        hrs_trab = df_prod["horas_trabalhadas"].sum()
+
+        hrs_par = df_prod["horas_paradas"].sum()
+
+        eficiencia = (
+
+            (hrs_trab / (hrs_trab + hrs_par) * 100) if (hrs_trab + hrs_par) > 0 else 0
+
+        )
+
     else:
-        st.info("Nenhum dado de produção cadastrado para exibição dos gráficos.")
+
+        metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
+
+
+
+    media_por_sonda = metros_hoje / sondas_op if sondas_op > 0 else 0
+
+
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    with c1:
+
+        render_kpi_card("Sondas Operando", f"{sondas_op}/{sondas_total}")
+
+    with c2:
+
+        render_kpi_card("Produção Hoje", f"{metros_hoje:.1f} m")
+
+    with c3:
+
+        render_kpi_card("Total Acumulado", f"{metros_acumulados:.1f} m")
+
+    with c4:
+
+        render_kpi_card("Média / Sonda", f"{media_por_sonda:.1f} m")
+
+    with c5:
+
+        render_kpi_card("Eficiência", f"{eficiencia:.0f}%")
+
+
+
+    st.markdown("---")
+
+    st.subheader("Status das Sondas em Campo")
+
+
+
+    if not df_sondas.empty:
+
+        cols = st.columns(min(max(sondas_total, 1), 4))
+
+        status_emojis = {"Operando": "🟢", "Parada": "🟡", "Manutenção": "🔴"}
+
+        for i, (_, sonda) in enumerate(df_sondas.iterrows()):
+
+            with cols[i % 4]:
+
+                with st.container(border=True):
+
+                    emoji = status_emojis.get(sonda["status"], "⚪")
+
+                    st.markdown(f"### {emoji} {sonda['codigo']}")
+
+                    st.write(f"**Equipe:** {sonda['equipe']}")
+
+                    st.write(f"**Projeto:** {sonda['projeto']}")
+
+                    st.write(f"**Status:** {sonda['status']}")
+
+    else:
+
+        st.info("Nenhuma sonda vinculada a este perfil.")
+
+
 
 # ------------------------------------------------------------------------------
-# TELA 2. CADASTRO DE SONDAS
+
+# 2. CADASTRO DE SONDAS
+
 # ------------------------------------------------------------------------------
+
 elif opcao == "🚜 Cadastro de Sondas":
-    st.title("🚜 Gestão de Sondas e Equipamentos")
-    st.caption("Cadastro e manutenção das sondas de perfuração.")
+
+    st.title("🚜 Gestão de Sondas")
+
+    st.caption("Controle e atualização do parque de equipamentos.")
+
     st.markdown("---")
+
+
 
     conn = get_connection()
-    df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+
+    if perfil_atual == "Admin":
+
+        df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
+
+    else:
+
+        df_sondas = pd.read_sql_query(
+
+            "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
+
+        )
+
     conn.close()
 
-    tab_lista, tab_nova = st.tabs(["📋 Sondas Cadastradas", "➕ Nova Sonda"])
+
+
+    if perfil_atual == "Admin":
+
+        tab_lista, tab_novo, tab_editar = st.tabs(
+
+            ["📋 Sondas Cadastradas", "➕ Nova Sonda", "✏️ Editar Sonda"]
+
+        )
+
+    else:
+
+        tab_lista = st.container()
+
+
 
     with tab_lista:
+
         if not df_sondas.empty:
+
             st.dataframe(df_sondas, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhuma sonda cadastrada.")
 
-    with tab_nova:
-        if perfil_atual != "Admin":
-            st.error("Apenas usuários Administradores podem cadastrar novas sondas.")
         else:
+
+            st.info("Nenhuma sonda encontrada.")
+
+
+
+    if perfil_atual == "Admin":
+
+        with tab_novo:
+
             with st.container(border=True):
+
                 with st.form("form_sonda", clear_on_submit=True):
+
                     st.subheader("Cadastrar Nova Sonda")
+
                     c1, c2 = st.columns(2)
-                    codigo = c1.text_input("Código/Identificador da Sonda (ex: SND-01)")
-                    modelo = c2.text_input("Modelo / Fabricante (ex: Mach 1200, HW-60)")
-                    status = st.selectbox("Status Operacional", ["Operacional", "Manutenção", "Inativa"])
 
-                    btn_salvar_sonda = st.form_submit_button("Salvar Sonda", type="primary", use_container_width=True)
+                    codigo = c1.text_input("Identificação (ex: SD-01)")
 
-                    if btn_salvar_sonda and codigo:
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        try:
-                            cursor.execute(
-                                "INSERT INTO sondas (codigo, modelo, status) VALUES (?, ?, ?)",
-                                (codigo, modelo, status),
-                            )
-                            conn.commit()
-                            st.success(f"Sonda '{codigo}' cadastrada com sucesso!")
-                            st.rerun()
-                        except sqlite3.IntegrityError:
-                            st.error("Já existe uma sonda cadastrada com este código.")
-                        finally:
-                            conn.close()
+                    equipe = c2.text_input("Equipe Responsável")
 
-# ------------------------------------------------------------------------------
-# TELA 3. APONTAMENTO DIÁRIO
-# ------------------------------------------------------------------------------
-elif opcao == "📝 Apontamento Diário":
-    st.title("📝 Apontamento Diário de Perfuração (DPR)")
-    st.caption("Lançamento de produção por turno, profundidades executadas e paradas de sonda.")
-    st.markdown("---")
 
-    conn = get_connection()
-    if perfil_atual == "Admin":
-        df_prod_full = pd.read_sql_query(
-            """
-            SELECT p.id, p.data, s.codigo as sonda, p.furo_id, p.prof_inicial, p.prof_final,
-                   (p.prof_final - p.prof_inicial) as avanco_m, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
-            FROM producao_diaria p
-            LEFT JOIN sondas s ON p.sonda_id = s.id ORDER BY p.data DESC, p.id DESC
-        """,
-            conn,
-        )
-        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas WHERE status = 'Operacional'", conn)
-        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos WHERE situacao != 'Concluído'", conn)
-    else:
-        df_prod_full = pd.read_sql_query(
-            """
-            SELECT p.id, p.data, s.codigo as sonda, p.furo_id, p.prof_inicial, p.prof_final,
-                   (p.prof_final - p.prof_inicial) as avanco_m, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
-            FROM producao_diaria p
-            LEFT JOIN sondas s ON p.sonda_id = s.id
-            WHERE p.sonda_id = ? ORDER BY p.data DESC, p.id DESC
-        """,
-            conn,
-            params=(sonda_id_atual,),
-        )
-        df_sondas = pd.read_sql_query(
-            "SELECT id, codigo FROM sondas WHERE id = ? AND status = 'Operacional'", conn, params=(sonda_id_atual,)
-        )
-        df_furos = pd.read_sql_query(
-            "SELECT id, sonda_id FROM furos WHERE sonda_id = ? AND situacao != 'Concluído'", conn, params=(sonda_id_atual,)
-        )
-    conn.close()
 
-    tab_registros, tab_novo_apontamento, tab_excluir = st.tabs(
-        ["📋 Apontamentos Realizados", "➕ Novo Apontamento", "🗑️ Excluir Registros"]
-    )
+                    c3, c4 = st.columns(2)
 
-    with tab_registros:
-        if not df_prod_full.empty:
-            st.dataframe(df_prod_full, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum apontamento diário realizado.")
+                    projeto = c3.text_input("Frente / Projeto")
 
-    with tab_novo_apontamento:
-        if not df_sondas.empty and not df_furos.empty:
-            with st.container(border=True):
-                st.subheader("Registrar Apontamento Diário")
-                with st.form("form_apontamento", clear_on_submit=True):
-                    c1, c2, c3 = st.columns(3)
-                    data_reg = c1.date_input("Data do Apontamento", value=date.today())
+                    status = c4.selectbox(
 
-                    sonda_sel_codigo = c2.selectbox("Sonda", df_sondas["codigo"].tolist())
-                    sonda_id_sel = int(df_sondas[df_sondas["codigo"] == sonda_sel_codigo]["id"].values[0])
+                        "Status Atual", ["Operando", "Parada", "Manutenção"]
 
-                    furos_filtrados = df_furos[df_furos["sonda_id"] == sonda_id_sel]["id"].tolist()
-                    furo_sel = c3.selectbox(
-                        "Furo de Sondagem",
-                        furos_filtrados if furos_filtrados else ["Nenhum furo encontrado"],
                     )
 
-                    c4, c5 = st.columns(2)
-                    prof_inicial = c4.number_input("Profundidade Inicial (m)", min_value=0.0, step=0.1)
-                    prof_final = c5.number_input("Profundidade Final (m)", min_value=0.0, step=0.1)
 
-                    c6, c7 = st.columns(2)
-                    horas_trabalhadas = c6.number_input("Horas Trabalhadas (h)", min_value=0.0, max_value=24.0, value=8.0, step=0.5)
-                    horas_paradas = c7.number_input("Horas Paradas (h)", min_value=0.0, max_value=24.0, value=0.0, step=0.5)
 
-                    motivo_parada = st.text_area("Motivo da Parada (se houver)", placeholder="Ex: Manutenção preventiva na bomba d'água, chuva forte...")
+                    btn_salvar = st.form_submit_button(
 
-                    btn_salvar_prod = st.form_submit_button("Registrar Produção", type="primary", use_container_width=True)
+                        "Cadastrar Sonda", type="primary", use_container_width=True
 
-                    if btn_salvar_prod:
-                        if prof_final < prof_inicial:
-                            st.error("A profundidade final não pode ser menor que a inicial.")
-                        elif furo_sel == "Nenhum furo encontrado":
-                            st.error("Selecione um furo válido para vincular o apontamento.")
-                        else:
-                            conn = get_connection()
-                            cursor = conn.cursor()
-                            try:
-                                cursor.execute(
-                                    """
-                                    INSERT INTO producao_diaria 
-                                    (data, sonda_id, furo_id, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                    """,
-                                    (str(data_reg), sonda_id_sel, furo_sel, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada),
-                                )
-                                cursor.execute(
-                                    """
-                                    UPDATE furos 
-                                    SET prof_executada = MAX(prof_executada, ?),
-                                        situacao = CASE WHEN situacao = 'Planejado' THEN 'Em Andamento' ELSE situacao END
-                                    WHERE id = ?
-                                    """,
-                                    (prof_final, furo_sel),
-                                )
-                                conn.commit()
-                                st.success("Apontamento diário registrado com sucesso!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Erro ao salvar apontamento: {e}")
-                            finally:
-                                conn.close()
-        else:
-            st.warning("Cadastre primeiro ao menos uma Sonda e um Furo vinculados para poder registrar a produção.")
-
-    with tab_excluir:
-        if not df_prod_full.empty:
-            with st.container(border=True):
-                st.subheader("Excluir Apontamento")
-                id_para_excluir = st.selectbox("Selecione o ID do Apontamento", df_prod_full["id"].tolist())
-                if st.button("🗑️ Confirmar Exclusão", type="primary"):
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM producao_diaria WHERE id = ?", (id_para_excluir,))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Apontamento #{id_para_excluir} excluído.")
-                    st.rerun()
-
-# ------------------------------------------------------------------------------
-# TELA 4. CONTROLE DE FUROS
-# ------------------------------------------------------------------------------
-elif opcao == "📍 Controle de Furos":
-    st.title("📍 Controle e Planejamento de Furos")
-    st.caption("Gestão de posições, cotas e metas de perfuração com apoio de GPS.")
-    st.markdown("---")
-
-    conn = get_connection()
-    if perfil_atual == "Admin":
-        df_furos = pd.read_sql_query(
-            """
-            SELECT f.id, s.codigo as sonda_codigo, f.coord_e, f.coord_n, f.cota, 
-                   f.prof_planejada, f.prof_executada, f.situacao
-            FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id
-        """,
-            conn,
-        )
-        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
-    else:
-        df_furos = pd.read_sql_query(
-            """
-            SELECT f.id, s.codigo as sonda_codigo, f.coord_e, f.coord_n, f.cota, 
-                   f.prof_planejada, f.prof_executada, f.situacao
-            FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id
-            WHERE f.sonda_id = ?
-        """,
-            conn,
-            params=(sonda_id_atual,),
-        )
-        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,))
-    conn.close()
-
-    tab_lista_furos, tab_novo_furo, tab_status_furo = st.tabs(
-        ["📋 Furos Cadastrados", "➕ Novo Furo", "🔄 Atualizar Situação"]
-    )
-
-    with tab_lista_furos:
-        if not df_furos.empty:
-            st.dataframe(df_furos, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum furo cadastrado.")
-
-    with tab_novo_furo:
-        if not df_sondas.empty:
-            with st.container(border=True):
-                st.subheader("Cadastrar Novo Furo de Sondagem")
-
-                st.markdown("##### 🛰️ Obter Coordenadas do GPS Local")
-                location = streamlit_geolocation()
-                lat_gps, lon_gps = None, None
-                if location and location.get("latitude"):
-                    lat_gps = location["latitude"]
-                    lon_gps = location["longitude"]
-                    e_calc, n_calc, zone_calc = latlon_to_utm(lat_gps, lon_gps)
-                    st.success(
-                        f"GPS Capturado: Lat {lat_gps:.5f}, Lon {lon_gps:.5f} ➡️ UTM (Fuso {zone_calc}S): E={e_calc}, N={n_calc}"
                     )
-                else:
-                    e_calc, n_calc = 0.0, 0.0
 
-                with st.form("form_furo", clear_on_submit=True):
-                    c1, c2 = st.columns(2)
-                    furo_id = c1.text_input("Identificação do Furo (ex: F-01, FS-03)")
-                    sonda_sel = c2.selectbox("Sonda Designada", df_sondas["codigo"].tolist())
-                    sonda_id_sel = int(df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0])
 
-                    c3, c4, c5 = st.columns(3)
-                    coord_e = c3.number_input("Coordenada Este (UTM E)", value=float(e_calc), format="%.2f")
-                    coord_n = c4.number_input("Coordenada Norte (UTM N)", value=float(n_calc), format="%.2f")
-                    cota = c5.number_input("Cota (m)", value=0.0, step=0.5)
 
-                    c6, c7 = st.columns(2)
-                    prof_planejada = c6.number_input("Profundidade Planejada (m)", min_value=0.0, value=50.0, step=1.0)
-                    situacao = c7.selectbox("Situação Inicial", ["Planejado", "Em Andamento", "Concluído", "Cancelado"])
+                    if btn_salvar and codigo and equipe and projeto:
 
-                    btn_salvar_furo = st.form_submit_button("Salvar Furo", type="primary", use_container_width=True)
-
-                    if btn_salvar_furo and furo_id:
                         conn = get_connection()
+
                         cursor = conn.cursor()
+
                         try:
+
                             cursor.execute(
-                                """
-                                INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada, situacao)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                                """,
-                                (furo_id, sonda_id_sel, coord_e, coord_n, cota, prof_planejada, situacao),
+
+                                "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)",
+
+                                (codigo, equipe, projeto, status),
+
                             )
+
                             conn.commit()
-                            st.success(f"Furo '{furo_id}' cadastrado com sucesso!")
+
+                            st.success(f"Sonda '{codigo}' cadastrada!")
+
                             st.rerun()
+
                         except sqlite3.IntegrityError:
-                            st.error("Já existe um furo cadastrado com essa identificação ID.")
+
+                            st.error("Esta identificação já existe.")
+
                         finally:
+
                             conn.close()
-        else:
-            st.warning("É necessário ter ao menos uma sonda cadastrada para adicionar furos.")
 
-    with tab_status_furo:
-        if not df_furos.empty:
-            with st.container(border=True):
-                with st.form("form_status_furo"):
-                    st.subheader("Alterar Situação do Furo")
-                    furo_alterar = st.selectbox("Selecione o Furo", df_furos["id"].tolist())
-                    nova_situacao = st.selectbox("Nova Situação", ["Planejado", "Em Andamento", "Concluído", "Cancelado"])
-                    btn_atualizar_sit = st.form_submit_button("Atualizar Status", type="primary", use_container_width=True)
 
-                    if btn_atualizar_sit:
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        cursor.execute("UPDATE furos SET situacao = ? WHERE id = ?", (nova_situacao, furo_alterar))
-                        conn.commit()
-                        conn.close()
-                        st.success(f"Situação do furo '{furo_alterar}' alterada para '{nova_situacao}'.")
-                        st.rerun()
 
-# ------------------------------------------------------------------------------
-# TELA 5. BOLETIM GEOLÓGICO
-# ------------------------------------------------------------------------------
-elif opcao == "⛏️ Boletim Geológico":
-    st.title("⛏️ Boletim Geológico & Descrição de Testemunhos")
-    st.caption("Lançamento de litologia, porcentagem de recuperação, RQD e fotos no Supabase Storage.")
-    st.markdown("---")
+        with tab_editar:
 
-    conn = get_connection()
-    if perfil_atual == "Admin":
-        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
-        df_geo = pd.read_sql_query(
-            """
-            SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m,
-                   bg.recuperacao_m, ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rec_pct,
-                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct,
-                   bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.foto_url
-            FROM boletim_geologico bg ORDER BY bg.furo_id, bg.de_m ASC
-        """,
-            conn,
-        )
-    else:
-        df_furos = pd.read_sql_query("SELECT id FROM furos WHERE sonda_id = ?", conn, params=(sonda_id_atual,))
-        df_geo = pd.read_sql_query(
-            """
-            SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m,
-                   bg.recuperacao_m, ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rec_pct,
-                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct,
-                   bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.foto_url
-            FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id 
-            WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
-        """,
-            conn,
-            params=(sonda_id_atual,),
-        )
-    conn.close()
+            if not df_sondas.empty:
 
-    tab_visu_geo, tab_novo_geo = st.tabs(["📋 Registros Descritos", "➕ Novo Inset / Manobra"])
+                with st.container(border=True):
 
-    with tab_visu_geo:
-        if not df_geo.empty:
-            furo_filtro = st.selectbox("Filtrar por Furo", ["Todos"] + df_geo["furo_id"].unique().tolist())
-            df_exibir = df_geo if furo_filtro == "Todos" else df_geo[df_geo["furo_id"] == furo_filtro]
-            st.dataframe(df_exibir, use_container_width=True, hide_index=True)
-        else:
-            st.info("Nenhum boletim geológico registrado.")
+                    with st.form("form_edit_sonda"):
 
-    with tab_novo_geo:
-        if not df_furos.empty:
-            with st.container(border=True):
-                st.subheader("Registrar Intervalo Geológico / Manobra")
-                furo_geo_sel = st.selectbox("Furo de Sondagem", df_furos["id"].tolist())
+                        st.subheader("Editar Dados da Sonda")
 
-                c1, c2 = st.columns(2)
-                de_m = c1.number_input("De (m)", min_value=0.0, step=0.1)
-                ate_m = c2.number_input("Até (m)", min_value=0.0, step=0.1)
-                manobra = max(ate_m - de_m, 0.0)
+                        sonda_para_editar = st.selectbox(
 
-                c3, c4 = st.columns(2)
-                recuperacao_m = c3.number_input(
-                    f"Recuperação (m) [Máx: {manobra:.2f}m]",
-                    min_value=0.0,
-                    max_value=float(manobra) if manobra > 0 else 0.0,
-                    step=0.01,
-                )
-                rqd_m = c4.number_input(
-                    f"RQD Sumatório (m) [Máx: {manobra:.2f}m]",
-                    min_value=0.0,
-                    max_value=float(manobra) if manobra > 0 else 0.0,
-                    step=0.01,
-                )
+                            "Selecione a Sonda", df_sondas["codigo"].tolist()
 
-                rec_pct = (recuperacao_m / manobra * 100) if manobra > 0 else 0.0
-                rqd_pct = (rqd_m / manobra * 100) if manobra > 0 else 0.0
-                st.caption(f"📊 **Recuperação:** {rec_pct:.1f}% | **RQD:** {rqd_pct:.1f}%")
+                        )
 
-                c5, c6 = st.columns(2)
-                litologia = c5.text_input("Litologia / Rocha (ex: Gnaisse, Basalto, Solo Argiloso)")
-                n_amostra = c6.text_input("Nº da Amostra (opcional)")
+                        dados_sonda = df_sondas[
 
-                descricao_geologica = st.text_area("Descrição Geológico-Geotécnica (Grau de alteração, fraturamento, RMR, etc.)")
-                observacoes = st.text_input("Observações Adicionais")
+                            df_sondas["codigo"] == sonda_para_editar
 
-                st.markdown("##### 📸 Foto da Caixa de Testemunho")
-                foto_upload = st.file_uploader("Selecione a Imagem", type=["jpg", "jpeg", "png"])
+                        ].iloc[0]
 
-                if st.button("Salvar Boletim Geológico", type="primary", use_container_width=True):
-                    if ate_m <= de_m:
-                        st.error("O valor 'Até (m)' deve ser estritamente maior que 'De (m)'.")
-                    elif not litologia:
-                        st.error("Informe a litologia correspondente ao intervalo.")
-                    else:
-                        foto_url_final = None
-                        if foto_upload is not None:
-                            with st.spinner("Enviando foto para o Supabase Storage..."):
-                                foto_url_final = upload_foto_supabase(foto_upload, foto_upload.name)
 
-                        dados_boletim_local = {
-                            "furo_id": furo_geo_sel,
-                            "de_m": de_m,
-                            "ate_m": ate_m,
-                            "recuperacao_m": recuperacao_m,
-                            "rqd_m": rqd_m,
-                            "litologia": litologia,
-                            "descricao_geologica": descricao_geologica,
-                            "n_amostra": n_amostra,
-                            "observacoes": observacoes,
-                            "foto_url": foto_url_final,
-                        }
 
-                        conn = get_connection()
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            """
-                            INSERT INTO boletim_geologico 
-                            (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                furo_geo_sel,
-                                de_m,
-                                ate_m,
-                                recuperacao_m,
-                                rqd_m,
-                                litologia,
-                                descricao_geologica,
-                                n_amostra,
-                                observacoes,
-                                foto_url_final,
+                        c1, c2 = st.columns(2)
+
+                        novo_codigo = c1.text_input(
+
+                            "Código Oficial", value=dados_sonda["codigo"]
+
+                        )
+
+                        nova_equipe = c2.text_input(
+
+                            "Equipe", value=dados_sonda["equipe"]
+
+                        )
+
+
+
+                        c3, c4 = st.columns(2)
+
+                        novo_projeto = c3.text_input(
+
+                            "Projeto", value=dados_sonda["projeto"]
+
+                        )
+
+                        novo_status = c4.selectbox(
+
+                            "Status",
+
+                            ["Operando", "Parada", "Manutenção"],
+
+                            index=["Operando", "Parada", "Manutenção"].index(
+
+                                dados_sonda["status"]
+
                             ),
+
                         )
-                        conn.commit()
-                        conn.close()
 
-                        salvar_boletim_supabase(dados_boletim_local)
 
-                        st.success("Boletim Geológico gravado localmente e sincronizado no Supabase!")
-                        st.rerun()
-        else:
-            st.warning("É preciso cadastrar ao menos um furo antes de lançar dados geológicos.")
+
+                        btn_atualizar = st.form_submit_button(
+
+                            "Atualizar Cadastro",
+
+                            type="primary",
+
+                            use_container_width=True,
+
+                        )
+
+
+
+                        if btn_atualizar:
+
+                            conn = get_connection()
+
+                            cursor = conn.cursor()
+
+                            try:
+
+                                cursor.execute(
+
+                                    "UPDATE sondas SET codigo = ?, equipe = ?, projeto = ?, status = ? WHERE id = ?",
+
+                                    (
+
+                                        novo_codigo,
+
+                                        nova_equipe,
+
+                                        novo_projeto,
+
+                                        novo_status,
+
+                                        int(dados_sonda["id"]),
+
+                                    ),
+
+                                )
+
+                                conn.commit()
+
+                                st.success(f"Sonda '{novo_codigo}' atualizada!")
+
+                                st.rerun()
+
+                            except sqlite3.IntegrityError:
+
+                                st.error("O novo código já pertence a outra sonda.")
+
+                            finally:
+
+                                conn.close()
+
+
 
 # ------------------------------------------------------------------------------
-# TELA 6. GESTÃO DE USUÁRIOS (APENAS ADMIN)
-# ------------------------------------------------------------------------------
-elif opcao == "👥 Gestão de Usuários":
-    if perfil_atual != "Admin":
-        st.error("Acesso restrito apenas a Administradores.")
-        st.stop()
 
-    st.title("👥 Gestão de Usuários & Permissões (RBAC)")
-    st.caption("Controle de perfis (Admin, Geólogo, Operador) e vinculação às sondas.")
+# 3. APONTAMENTO DIÁRIO
+
+# ------------------------------------------------------------------------------
+
+elif opcao == "📝 Apontamento Diário":
+
+    st.title("📝 Apontamento Diário de Produção")
+
+    st.caption("Registro de avanço físico e tempos de paralisação.")
+
     st.markdown("---")
 
+
+
     conn = get_connection()
-    df_users = pd.read_sql_query(
-        """
-        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada 
-        FROM usuarios u LEFT JOIN sondas s ON u.sonda_id = s.id
-    """,
-        conn,
-    )
-    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+
+    if perfil_atual == "Admin":
+
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+
+        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos", conn)
+
+        df_prod_full = pd.read_sql_query(
+
+            """
+
+            SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
+
+                   (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
+
+            FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id
+
+            ORDER BY p.data DESC, p.id DESC
+
+        """,
+
+            conn,
+
+        )
+
+    else:
+
+        df_sondas = pd.read_sql_query(
+
+            "SELECT id, codigo FROM sondas WHERE id = ?",
+
+            conn,
+
+            params=(sonda_id_atual,),
+
+        )
+
+        df_furos = pd.read_sql_query(
+
+            "SELECT id, sonda_id FROM furos WHERE sonda_id = ?",
+
+            conn,
+
+            params=(sonda_id_atual,),
+
+        )
+
+        df_prod_full = pd.read_sql_query(
+
+            """
+
+            SELECT p.id, p.data, s.codigo as sonda_codigo, p.furo_id, p.prof_inicial, p.prof_final, 
+
+                   (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada
+
+            FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id
+
+            WHERE p.sonda_id = ? ORDER BY p.data DESC, p.id DESC
+
+        """,
+
+            conn,
+
+            params=(sonda_id_atual,),
+
+        )
+
     conn.close()
 
-    tab_users_lista, tab_user_novo = st.tabs(["📋 Usuários Cadastrados", "➕ Novo Usuário"])
 
-    with tab_users_lista:
-        st.dataframe(df_users, use_container_width=True, hide_index=True)
 
-    with tab_user_novo:
-        with st.container(border=True):
-            with st.form("form_novo_usuario", clear_on_submit=True):
-                st.subheader("Criar Novo Acesso")
-                c1, c2 = st.columns(2)
-                novo_user = c1.text_input("Nome de Usuário (Login)")
-                nova_senha = c2.text_input("Senha", type="password")
+    tab_historico, tab_novo, tab_excluir = st.tabs(
 
-                c3, c4 = st.columns(2)
-                novo_perfil = c3.selectbox("Perfil de Acesso", ["Admin", "Geólogo", "Operador"])
+        ["📋 Histórico", "➕ Novo Apontamento", "🗑️ Excluir Registro"]
 
-                sonda_opcoes = ["Nenhuma (Acesso Global)"] + df_sondas["codigo"].tolist()
-                sonda_vinc = c4.selectbox("Vincular Sonda", sonda_opcoes)
+    )
 
-                btn_criar_user = st.form_submit_button("Criar Usuário", type="primary", use_container_width=True)
 
-                if btn_criar_user and novo_user and nova_senha:
-                    s_id = None
-                    if sonda_vinc != "Nenhuma (Acesso Global)":
-                        s_id = int(df_sondas[df_sondas["codigo"] == sonda_vinc]["id"].values[0])
 
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    try:
-                        cursor.execute(
-                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
-                            (novo_user, hash_senha(nova_senha), novo_perfil, s_id),
-                        )
-                        conn.commit()
-                        st.success(f"Usuário '{novo_user}' criado com sucesso!")
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Este nome de usuário já está em uso.")
-                    finally:
-                        conn.close()
+    with tab_historico:
+
+        if not df_prod_full.empty:
+
+            st.dataframe(df_prod_full, use_container_width=True, hide_index=True)
+
+        else:
+
+            st.info("Nenhum apontamento registrado.")
+
+
+
+    with tab_novo:
+
+        if not df_sondas.empty and not df_furos.empty:
+
+            with st.container(border=True):
+
+                with st.form("form_producao", clear_on_submit=True):
+
+                    st.subheader("Registrar Avanço Diário")
+
+                    c1, c2, c3 = st.columns(3)
+
+                    data_reg = c1.date_input("Data do Avanço", value=date.today())
+
+                    
+
+                    sonda_sel = c2.selectbox(
+
+                        "Sonda",
+
+                        df_sondas["codigo"].tolist()
+
+                    )
+
+                    sonda_id_sel = df_sondas[df_sondas["codigo"] == sonda_sel]["id"].valu 
+
