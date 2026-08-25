@@ -1099,3 +1099,193 @@ elif opcao == "⛏️ Boletim Geológico":
                         st.rerun()
         else:
             st.warning("Cadastre um furo antes de lançar o boletim.")
+
+# ------------------------------------------------------------------------------
+# 5. CONTROLE DE FUROS
+# ------------------------------------------------------------------------------
+elif opcao == "📍 Controle de Furos":
+    st.title("📍 Controle de Furos")
+    st.caption("Mapeamento e acompanhamento do avanço dos furos de sondagem.")
+    st.markdown("---")
+
+    conn = get_connection()
+    if perfil_atual == "Admin":
+        df_furos = pd.read_sql_query("SELECT * FROM furos", conn)
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    else:
+        df_furos = pd.read_sql_query(
+            "SELECT * FROM furos WHERE sonda_id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
+        df_sondas = pd.read_sql_query(
+            "SELECT id, codigo FROM sondas WHERE id = ?",
+            conn,
+            params=(sonda_id_atual,),
+        )
+    conn.close()
+
+    tab_furos_lista, tab_furo_novo = st.tabs(
+        ["📋 Furos Cadastrados", "➕ Novo Furo"]
+    )
+
+    with tab_furos_lista:
+        if not df_furos.empty:
+            st.dataframe(df_furos, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum furo cadastrado.")
+
+    with tab_furo_novo:
+        if not df_sondas.empty:
+            with st.container(border=True):
+                with st.form("form_furo", clear_on_submit=True):
+                    st.subheader("Cadastrar Novo Furo")
+                    c1, c2 = st.columns(2)
+                    id_furo = c1.text_input("Identificação do Furo (ex: F-01)")
+                    sonda_furo = c2.selectbox(
+                        "Sonda Responsável", df_sondas["codigo"].tolist()
+                    )
+
+                    c3, c4, c5 = st.columns(3)
+                    coord_e = c3.number_input("Coordenada E (UTM)", value=0.0)
+                    coord_n = c4.number_input("Coordenada N (UTM)", value=0.0)
+                    cota = c5.number_input("Cota (m)", value=0.0)
+
+                    c6, c7 = st.columns(2)
+                    prof_plan = c6.number_input(
+                        "Profundidade Planejada (m)", min_value=0.0, step=1.0
+                    )
+                    situacao = c7.selectbox(
+                        "Situação",
+                        ["Planejado", "Em Andamento", "Concluído", "Cancelado"],
+                    )
+
+                    btn_salvar_furo = st.form_submit_button(
+                        "Cadastrar Furo",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+                    if btn_salvar_furo and id_furo:
+                        s_id = int(
+                            df_sondas[df_sondas["codigo"] == sonda_furo][
+                                "id"
+                            ].values[0]
+                        )
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        try:
+                            cursor.execute(
+                                """
+                                INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada, situacao)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    id_furo,
+                                    s_id,
+                                    coord_e,
+                                    coord_n,
+                                    cota,
+                                    prof_plan,
+                                    situacao,
+                                ),
+                            )
+                            conn.commit()
+                            st.success(f"Furo '{id_furo}' cadastrado!")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("Este ID de furo já existe.")
+                        finally:
+                            conn.close()
+
+# ------------------------------------------------------------------------------
+# 6. GESTÃO DE USUÁRIOS (ADMINISTRADOR)
+# ------------------------------------------------------------------------------
+elif opcao == "👥 Gestão de Usuários":
+    st.title("👥 Gestão de Usuários e Acessos")
+    st.caption(
+        "Cadastro de operadores, geólogos e controle de permissões por sonda."
+    )
+    st.markdown("---")
+
+    conn = get_connection()
+    df_usuarios = pd.read_sql_query(
+        """
+        SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada 
+        FROM usuarios u 
+        LEFT JOIN sondas s ON u.sonda_id = s.id
+    """,
+        conn,
+    )
+    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    conn.close()
+
+    tab_usr_lista, tab_usr_novo = st.tabs(
+        ["📋 Usuários Cadastrados", "➕ Novo Usuário"]
+    )
+
+    with tab_usr_lista:
+        if not df_usuarios.empty:
+            st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum usuário cadastrado.")
+
+    with tab_usr_novo:
+        with st.container(border=True):
+            with st.form("form_novo_usuario", clear_on_submit=True):
+                st.subheader("Criar Novo Usuário")
+                c1, c2 = st.columns(2)
+                novo_usuario = c1.text_input("Nome de Usuário (Login)")
+                nova_senha = c2.text_input("Senha", type="password")
+
+                c3, c4 = st.columns(2)
+                novo_perfil = c3.selectbox(
+                    "Perfil de Acesso", ["Admin", "Geólogo", "Operador"]
+                )
+
+                sondas_lista = ["Nenhuma (Acesso Total)"] + df_sondas[
+                    "codigo"
+                ].tolist()
+                sonda_selecionada = c4.selectbox(
+                    "Vincular à Sonda Especifica", sondas_lista
+                )
+
+                btn_criar_usr = st.form_submit_button(
+                    "Cadastrar Usuário",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+                if btn_criar_usr and novo_usuario and nova_senha:
+                    s_id = None
+                    if (
+                        sonda_selecionada != "Nenhuma (Acesso Total)"
+                        and not df_sondas.empty
+                    ):
+                        s_id = int(
+                            df_sondas[df_sondas["codigo"] == sonda_selecionada][
+                                "id"
+                            ].values[0]
+                        )
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (
+                                novo_usuario,
+                                hash_senha(nova_senha),
+                                novo_perfil,
+                                s_id,
+                            ),
+                        )
+                        conn.commit()
+                        st.success(
+                            f"Usuário '{novo_usuario}' criado com sucesso!"
+                        )
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Este nome de usuário já existe.")
+                    finally:
+                        conn.close()
