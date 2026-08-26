@@ -1,1 +1,3 @@
 secrets.toml
+SUPABASE_URL = https://dhjibfnvuxqxglkqqqer.supabase.co
+SUPABASE_KEY = sb_secret_-dNWnX-f5nvWK7A_LHGbuw_D0cAzBQ4
