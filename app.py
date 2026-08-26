@@ -9,10 +9,8 @@ from datetime import date
 import openpyxl
 import pandas as pd
 import streamlit as st
-from openpyxl.chart import BarChart, PieChart, Reference
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.datavalidation import DataValidation
 from streamlit_geolocation import streamlit_geolocation
 
 # MÓDULO SUPABASE
@@ -28,7 +26,7 @@ from ui_components import aplicar_estilo_customizado, render_kpi_card
 st.set_page_config(
     page_title="Central de Controle - Sondagem",
     page_icon=None,
-    layout="wide",
+    layout="wide"
 )
 
 # Estilo CSS para ocultar elementos de marca, ícones nativos e menus do Streamlit
@@ -66,9 +64,7 @@ if "sonda_id" not in st.session_state:
 # CONEXÃO E CONFIGURAÇÃO DO SUPABASE
 # ==============================================================================
 
-SUPABASE_URL = st.secrets.get(
-    "SUPABASE_URL", "https://seu-projeto.supabase.co"
-)
+SUPABASE_URL = st.secrets.get("SUPABASE_URL", "https://seu-projeto.supabase.co")
 SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "sua-chave-aqui")
 
 
@@ -90,9 +86,7 @@ def upload_foto_supabase(file_buffer, nome_arquivo):
             file_options={"content-type": f"image/{ext}"},
         )
 
-        return supabase.storage.from_(bucket_name).get_public_url(
-            caminho_storage
-        )
+        return supabase.storage.from_(bucket_name).get_public_url(caminho_storage)
     except Exception as e:
         st.error(f"Erro ao enviar imagem para o Supabase Storage: {e}")
         return None
@@ -253,7 +247,7 @@ def botao_logout():
 
 
 # ==============================================================================
-# HELPER DE EXPORTAÇÃO EXCEL AUTOMATIZADO COM DASHBOARD E GRÁFICOS
+# HELPER DE EXPORTAÇÃO EXCEL
 # ==============================================================================
 
 
@@ -261,32 +255,22 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
 
-    # Estilos Visuais Profissionais
-    COLOR_NAVY = "1B365D"
-    COLOR_HEADER_BG = "2C3E50"
-    COLOR_HEADER_TXT = "FFFFFF"
-    COLOR_ZEBRA = "F8F9FA"
-    COLOR_CARD_BG = "F4F6F7"
-    COLOR_BORDER = "D9D9D9"
+    cor_cabecalho = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    cor_titulo = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")
+    cor_card = PatternFill(start_color="F2F4F7", end_color="F2F4F7", fill_type="solid")
+    cor_zebra = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
 
-    fonte_titulo = Font(name="Arial", size=16, bold=True, color="FFFFFF")
-    fonte_cabecalho = Font(name="Arial", size=10, bold=True, color=COLOR_HEADER_TXT)
-    fonte_dados = Font(name="Arial", size=10)
-    fonte_bold = Font(name="Arial", size=10, bold=True)
-    fonte_kpi_num = Font(name="Arial", size=18, bold=True, color=COLOR_NAVY)
-    fonte_kpi_lbl = Font(name="Arial", size=9, bold=True, color="7F8C8D")
+    fonte_titulo = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+    fonte_cabecalho = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    fonte_card_num = Font(name="Calibri", size=14, bold=True, color="1F4E79")
+    fonte_card_lbl = Font(name="Calibri", size=9, italic=True, color="595959")
+    fonte_dados = Font(name="Calibri", size=10)
 
-    fill_navy = PatternFill(start_color=COLOR_NAVY, end_color=COLOR_NAVY, fill_type="solid")
-    fill_header = PatternFill(start_color=COLOR_HEADER_BG, end_color=COLOR_HEADER_BG, fill_type="solid")
-    fill_zebra = PatternFill(start_color=COLOR_ZEBRA, end_color=COLOR_ZEBRA, fill_type="solid")
-    fill_card = PatternFill(start_color=COLOR_CARD_BG, end_color=COLOR_CARD_BG, fill_type="solid")
-    fill_logo = PatternFill(start_color="EAEDED", end_color="EAEDED", fill_type="solid")
-
-    borda_fina = Side(border_style="thin", color=COLOR_BORDER)
+    borda_fina = Side(border_style="thin", color="D9D9D9")
     borda_caixa = Border(left=borda_fina, right=borda_fina, top=borda_fina, bottom=borda_fina)
 
-    # Buscar dados do SQLite
     conn = get_connection()
+
     if perfil_usuario == "Admin":
         df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
         df_prod = pd.read_sql_query(
@@ -295,10 +279,10 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
         )
         df_geo = pd.read_sql_query(
             """
-            SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
-                   ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as recuperacao_pct,
-                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes
-            FROM boletim_geologico bg ORDER BY bg.furo_id, bg.de_m ASC
+            SELECT id, furo_id, de_m, ate_m, (ate_m - de_m) as avanco_m, recuperacao_m, 
+                   ROUND((recuperacao_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as recuperacao_pct,
+                   rqd_m, ROUND((rqd_m / NULLIF(ate_m - de_m, 0)) * 100, 1) as rqd_pct, litologia, n_amostra, descricao_geologica, observacoes, foto_url
+            FROM boletim_geologico ORDER BY furo_id, de_m ASC
         """,
             conn,
         )
@@ -313,7 +297,7 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
             """
             SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
                    ROUND((bg.recuperacao_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as recuperacao_pct,
-                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes
+                   bg.rqd_m, ROUND((bg.rqd_m / NULLIF(bg.ate_m - bg.de_m, 0)) * 100, 1) as rqd_pct, bg.litologia, bg.n_amostra, bg.descricao_geologica, bg.observacoes, bg.foto_url
             FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC
         """,
             conn,
@@ -321,217 +305,42 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
         )
     conn.close()
 
-    # 1. ABA DE DASHBOARD
     ws_dash = wb.active
-    ws_dash.title = "Dashboard"
+    ws_dash.title = "Dashboard Executivo"
     ws_dash.views.sheetView[0].showGridLines = True
+    ws_dash.merge_cells("A1:H1")
+    ws_dash["A1"] = "DASHBOARD EXECUTIVO — CONTROLE INTEGRADO DE SONDAGEM"
+    ws_dash["A1"].font = fonte_titulo
+    ws_dash["A1"].fill = cor_titulo
+    ws_dash["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws_dash.row_dimensions[1].height = 40
 
-    # Espaço para Logomarca
-    ws_dash.merge_cells("A1:C3")
-    logo_cell = ws_dash["A1"]
-    logo_cell.value = "Espaço para Logo\n[ Insira a Imagem Aqui ]"
-    logo_cell.font = Font(name="Arial", size=9, italic=True, color="7F8C8D")
-    logo_cell.fill = fill_logo
-    logo_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    total_sondas = len(df_sondas)
+    sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
+    total_metros = (df_prod["prof_final"] - df_prod["prof_inicial"]).sum() if not df_prod.empty else 0.0
+    total_hrs_trab = df_prod["horas_trabalhadas"].sum() if not df_prod.empty else 0.0
+    total_hrs_par = df_prod["horas_paradas"].sum() if not df_prod.empty else 0.0
+    eficiencia = ((total_hrs_trab / (total_hrs_trab + total_hrs_par) * 100) if (total_hrs_trab + total_hrs_par) > 0 else 0.0)
 
-    ws_dash.merge_cells("D1:L3")
-    dash_title = ws_dash["D1"]
-    dash_title.value = "CENTRAL DE CONTROLE — OPERAÇÕES DE SONDAGEM"
-    dash_title.font = fonte_titulo
-    dash_title.fill = fill_navy
-    dash_title.alignment = Alignment(horizontal="center", vertical="center")
-
-    # Função Helper KPI Cards
-    def criar_kpi_card(ws, start_col, start_row, label, formula_val, num_format=None):
-        col_s = get_column_letter(start_col)
-        col_e = get_column_letter(start_col + 2)
-        ws.merge_cells(f"{col_s}{start_row}:{col_e}{start_row}")
-        lbl_c = ws[f"{col_s}{start_row}"]
-        lbl_c.value = label.upper()
-        lbl_c.font = fonte_kpi_lbl
-        lbl_c.fill = fill_card
-        lbl_c.alignment = Alignment(horizontal="center", vertical="center")
-
-        ws.merge_cells(f"{col_s}{start_row+1}:{col_e}{start_row+2}")
-        val_c = ws[f"{col_s}{start_row+1}"]
-        val_c.value = formula_val
-        val_c.font = fonte_kpi_num
-        val_c.fill = fill_card
-        val_c.alignment = Alignment(horizontal="center", vertical="center")
-        if num_format:
-            val_c.number_format = num_format
-
-        for r in range(start_row, start_row + 3):
-            for c in range(start_col, start_col + 3):
-                ws.cell(row=r, column=c).border = borda_caixa
-
-    criar_kpi_card(ws_dash, 1, 5, "Total de Registros", "=COUNTA('Registros de Sondagem'!A5:A200)")
-    criar_kpi_card(ws_dash, 4, 5, "Avanço Acumulado", "=SUM('Registros de Sondagem'!H5:H200)", "#,##0.00\" m\"")
-    criar_kpi_card(ws_dash, 7, 5, "Recuperação Média", "=AVERAGE('Registros de Sondagem'!I5:I200)", "0.0%")
-    criar_kpi_card(ws_dash, 10, 5, "RQD Médio", "=AVERAGE('Registros de Sondagem'!J5:J200)", "0.0%")
-
-    # Tabela Auxiliar de Agregação no Dashboard para Gráficos
-    ws_dash.cell(row=10, column=1, value="Sonda / Furo").font = fonte_bold
-    ws_dash.cell(row=10, column=2, value="Avanço (m)").font = fonte_bold
-
-    litos_unicas = df_geo["litologia"].unique().tolist() if not df_geo.empty else ["Solo", "Xisto", "Gnaisse"]
-    sondas_unicas = df_sondas["codigo"].unique().tolist() if not df_sondas.empty else ["Sonda-01"]
-
-    for idx, s_cod in enumerate(sondas_unicas[:5], start=11):
-        ws_dash.cell(row=idx, column=1, value=s_cod).font = fonte_dados
-        c = ws_dash.cell(row=idx, column=2, value=f"=SUMIF('Registros de Sondagem'!$C$5:$C$200, A{idx}, 'Registros de Sondagem'!$H$5:$H$200)")
-        c.font = fonte_dados
-        c.number_format = "#,##0.00"
-
-    chart_bar = BarChart()
-    chart_bar.type = "col"
-    chart_bar.style = 10
-    chart_bar.title = "Avanço por Sonda (m)"
-    chart_bar.y_axis.title = "Metros"
-    chart_bar.legend = None
-    chart_bar.width = 14
-    chart_bar.height = 9
-
-    data_bar = Reference(ws_dash, min_col=2, min_row=10, max_row=10 + len(sondas_unicas[:5]))
-    cats_bar = Reference(ws_dash, min_col=1, min_row=11, max_row=10 + len(sondas_unicas[:5]))
-    chart_bar.add_data(data_bar, titles_from_data=True)
-    chart_bar.set_categories(cats_bar)
-    ws_dash.add_chart(chart_bar, "A16")
-
-    # Tabela 2: Distribuição por Litologia
-    ws_dash.cell(row=10, column=5, value="Litologia").font = fonte_bold
-    ws_dash.cell(row=10, column=6, value="Metragem (m)").font = fonte_bold
-
-    for idx, lit in enumerate(litos_unicas[:6], start=11):
-        ws_dash.cell(row=idx, column=5, value=lit).font = fonte_dados
-        c = ws_dash.cell(row=idx, column=6, value=f"=SUMIF('Registros de Sondagem'!$E$5:$E$200, E{idx}, 'Registros de Sondagem'!$H$5:$H$200)")
-        c.font = fonte_dados
-        c.number_format = "#,##0.00"
-
-    chart_pie = PieChart()
-    chart_pie.title = "Distribuição Litológica"
-    chart_pie.width = 14
-    chart_pie.height = 9
-
-    data_pie = Reference(ws_dash, min_col=6, min_row=10, max_row=10 + len(litos_unicas[:6]))
-    cats_pie = Reference(ws_dash, min_col=5, min_row=11, max_row=10 + len(litos_unicas[:6]))
-    chart_pie.add_data(data_pie, titles_from_data=True)
-    chart_pie.set_categories(cats_pie)
-    ws_dash.add_chart(chart_pie, "G16")
-
-    # 2. ABA DE REGISTROS DE SONDAGEM
-    ws_data = wb.create_sheet(title="Registros de Sondagem")
-    ws_data.views.sheetView[0].showGridLines = True
-
-    ws_data.merge_cells("A1:K2")
-    title_data = ws_data["A1"]
-    title_data.value = "BASE DE DADOS DE BOLETIM GEOLÓGICO DE CAMPO"
-    title_data.font = fonte_titulo
-    title_data.fill = fill_navy
-    title_data.alignment = Alignment(horizontal="center", vertical="center")
-
-    headers = [
-        "ID Registro", "Furo ID", "Sonda", "De (m)", "Até (m)", 
-        "Recuperação (m)", "RQD (m)", "Avanço (m)", "Recuperação (%)", "RQD (%)", "Litologia"
+    kpis = [
+        ("Sondas Operando", f"{sondas_op}/{total_sondas}", "A3:B3", "A4:B4", "A3:B4"),
+        ("Metragem Total", f"{total_metros:.1f} m", "D3:E3", "D4:E4", "D3:E4"),
+        ("Eficiência Geral", f"{eficiencia:.1f}%", "G3:H3", "G4:H4", "G3:H4"),
     ]
 
-    for c_idx, h_text in enumerate(headers, start=1):
-        cell = ws_data.cell(row=4, column=c_idx, value=h_text)
-        cell.font = fonte_cabecalho
-        cell.fill = fill_header
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = borda_caixa
-
-    row_count = 5
-    if not df_geo.empty:
-        for r_idx, r in df_geo.iterrows():
-            ws_data.cell(row=row_count, column=1, value=r["id"]).alignment = Alignment(horizontal="center")
-            ws_data.cell(row=row_count, column=2, value=str(r["furo_id"])).alignment = Alignment(horizontal="center")
-            ws_data.cell(row=row_count, column=3, value=sondas_unicas[0] if sondas_unicas else "SD-01").alignment = Alignment(horizontal="center")
-            ws_data.cell(row=row_count, column=4, value=r["de_m"]).number_format = "#,##0.00"
-            ws_data.cell(row=row_count, column=5, value=r["ate_m"]).number_format = "#,##0.00"
-            ws_data.cell(row=row_count, column=6, value=r["recuperacao_m"]).number_format = "#,##0.00"
-            ws_data.cell(row=row_count, column=7, value=r["rqd_m"]).number_format = "#,##0.00"
-
-            # Avanço Calculado Dinamicamente
-            c_av = ws_data.cell(row=row_count, column=8, value=f"=E{row_count}-D{row_count}")
-            c_av.number_format = "#,##0.00"
-
-            # Percentuais Calculados por Fórmula
-            c_rec_pct = ws_data.cell(row=row_count, column=9, value=f"=IFERROR(F{row_count}/H{row_count}, 0)")
-            c_rec_pct.number_format = "0.0%"
-
-            c_rqd_pct = ws_data.cell(row=row_count, column=10, value=f"=IFERROR(G{row_count}/H{row_count}, 0)")
-            c_rqd_pct.number_format = "0.0%"
-
-            ws_data.cell(row=row_count, column=11, value=r["litologia"])
-
-            for col in range(1, 12):
-                cell_item = ws_data.cell(row=row_count, column=col)
-                cell_item.font = fonte_dados
-                cell_item.border = borda_caixa
-                if row_count % 2 == 0:
-                    cell_item.fill = fill_zebra
-            row_count += 1
-    else:
-        row_count = 6
-
-    # Linha Totais
-    ws_data.cell(row=row_count, column=1, value="TOTAL / MÉDIA").font = fonte_bold
-    ws_data.cell(row=row_count, column=8, value=f"=SUM(H5:H{row_count-1})").number_format = "#,##0.00"
-    ws_data.cell(row=row_count, column=9, value=f"=AVERAGE(I5:I{row_count-1})").number_format = "0.0%"
-    ws_data.cell(row=row_count, column=10, value=f"=AVERAGE(J5:J{row_count-1})").number_format = "0.0%"
-
-    for col in range(1, 12):
-        cell_t = ws_data.cell(row=row_count, column=col)
-        cell_t.font = fonte_bold
-        cell_t.border = Border(top=Side(style="thin"), bottom=Side(style="double"))
-        cell_t.fill = PatternFill(start_color="EAEDED", end_color="EAEDED", fill_type="solid")
-
-    # 3. ABA DE TABELAS AUXILIARES
-    ws_aux = wb.create_sheet(title="Tabelas Auxiliares")
-    ws_aux.views.sheetView[0].showGridLines = True
-    ws_aux.merge_cells("A1:B1")
-    ws_aux["A1"] = "Domínios & Validações"
-    ws_aux["A1"].font = Font(name="Arial", size=12, bold=True, color=COLOR_NAVY)
-
-    ws_aux.cell(row=2, column=1, value="Litologias").font = fonte_bold
-    ws_aux.cell(row=2, column=2, value="Status").font = fonte_bold
-
-    aux_litologia = ["Solo de Alteração", "Xisto", "Quartzito", "Gnaisse", "Filito", "Itabirito"]
-    aux_status = ["Operando", "Parada", "Manutenção", "Concluído"]
-
-    max_r = max(len(aux_litologia), len(aux_status))
-    for i in range(max_r):
-        r_num = i + 3
-        if i < len(aux_litologia):
-            ws_aux.cell(row=r_num, column=1, value=aux_litologia[i]).font = fonte_dados
-        if i < len(aux_status):
-            ws_aux.cell(row=r_num, column=2, value=aux_status[i]).font = fonte_dados
-
-    # Validação de Dados na aba principal
-    dv_lito = DataValidation(type="list", formula1="'Tabelas Auxiliares'!$A$3:$A$8", allow_blank=True)
-    ws_data.add_data_validation(dv_lito)
-    dv_lito.add(f"K5:K{row_count+20}")
-
-    # Ajustar largura de colunas automaticamente
-    for ws in [ws_dash, ws_data, ws_aux]:
-        for col in ws.columns:
-            max_len = 0
-            col_letter = get_column_letter(col[0].column)
-            for cell in col:
-                if cell.coordinate in ws.merged_cells:
-                    continue
-                if cell.value:
-                    max_len = max(max_len, len(str(cell.value)))
-            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
-
-    ws_dash.column_dimensions["A"].width = 16
-    ws_dash.column_dimensions["B"].width = 16
-    ws_dash.column_dimensions["C"].width = 16
-    ws_dash.column_dimensions["D"].width = 16
-    ws_dash.column_dimensions["E"].width = 18
-    ws_dash.column_dimensions["F"].width = 16
+    for lbl, val, r_lbl, r_val, r_box in kpis:
+        ws_dash.merge_cells(r_lbl)
+        ws_dash[r_lbl.split(":")[0]] = lbl
+        ws_dash[r_lbl.split(":")[0]].font = fonte_card_lbl
+        ws_dash[r_lbl.split(":")[0]].alignment = Alignment(horizontal="center")
+        ws_dash.merge_cells(r_val)
+        ws_dash[r_val.split(":")[0]] = val
+        ws_dash[r_val.split(":")[0]].font = fonte_card_num
+        ws_dash[r_val.split(":")[0]].alignment = Alignment(horizontal="center")
+        for row in ws_dash[r_box]:
+            for cell in row:
+                cell.fill = cor_card
+                cell.border = borda_caixa
 
     wb.save(output)
     output.seek(0)
@@ -593,6 +402,10 @@ st.sidebar.download_button(
 # COMPONENTES DE TELA DA APLICAÇÃO
 # ==============================================================================
 
+# ==============================================================================
+# COMPONENTES DE TELA DA APLICAÇÃO
+# ==============================================================================
+
 # ------------------------------------------------------------------------------
 # 1. DASHBOARD GERAL (ILUMINADO E DESTAQUE DE SONDAS)
 # ------------------------------------------------------------------------------
@@ -604,17 +417,17 @@ if opcao == "Dashboard Geral":
     if perfil_atual == "Admin":
         df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
         df_prod = pd.read_sql_query(
-            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id",
-            conn,
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id", 
+            conn
         )
     else:
         df_sondas = pd.read_sql_query(
             "SELECT * FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,)
         )
         df_prod = pd.read_sql_query(
-            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?",
-            conn,
-            params=(sonda_id_atual,),
+            "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ?", 
+            conn, 
+            params=(sonda_id_atual,)
         )
     conn.close()
 
@@ -633,6 +446,7 @@ if opcao == "Dashboard Geral":
     else:
         metros_hoje, metros_acumulados, eficiencia = 0.0, 0.0, 0.0
 
+    # Estilo CSS para Cards Iluminados de KPIs e Sondas
     st.markdown(
         """
         <style>
@@ -674,50 +488,39 @@ if opcao == "Dashboard Geral":
         }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
+    # Indicadores KPI com Iluminação de Destaque
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(
-            f"""
+    with c1: 
+        st.markdown(f"""
             <div class="card-destaque">
                 <span style="font-size: 13px; color: #94a3b8;">🟢 SONDAS ATIVAS</span>
                 <h2 style="margin: 5px 0 0 0; color: #4ade80;">{sondas_op} <span style="font-size:16px; color:#cbd5e1;">/ {sondas_total}</span></h2>
             </div>
-        """,
-            unsafe_allow_html=True,
-        )
-    with c2:
-        st.markdown(
-            f"""
+        """, unsafe_allow_html=True)
+    with c2: 
+        st.markdown(f"""
             <div class="card-destaque">
                 <span style="font-size: 13px; color: #94a3b8;">🎯 PRODUÇÃO HOJE</span>
                 <h2 style="margin: 5px 0 0 0; color: #38bdf8;">{metros_hoje:.1f} m</h2>
             </div>
-        """,
-            unsafe_allow_html=True,
-        )
-    with c3:
-        st.markdown(
-            f"""
+        """, unsafe_allow_html=True)
+    with c3: 
+        st.markdown(f"""
             <div class="card-destaque">
                 <span style="font-size: 13px; color: #94a3b8;">📐 TOTAL ACUMULADO</span>
                 <h2 style="margin: 5px 0 0 0; color: #818cf8;">{metros_acumulados:.1f} m</h2>
             </div>
-        """,
-            unsafe_allow_html=True,
-        )
-    with c4:
-        st.markdown(
-            f"""
+        """, unsafe_allow_html=True)
+    with c4: 
+        st.markdown(f"""
             <div class="card-destaque">
                 <span style="font-size: 13px; color: #94a3b8;">⚡ EFICIÊNCIA OPERACIONAL</span>
                 <h2 style="margin: 5px 0 0 0; color: #f43f5e;">{eficiencia:.0f}%</h2>
             </div>
-        """,
-            unsafe_allow_html=True,
-        )
+        """, unsafe_allow_html=True)
 
     st.markdown("### 🚜 Monitoramento Individual de Sondas")
 
@@ -740,13 +543,10 @@ if opcao == "Dashboard Geral":
                 cor_status = "#f59e0b"
                 icone = "🟡"
 
+            # Busca metragem total produzida por essa sonda específica
             if not df_prod.empty:
                 prod_sonda = df_prod[df_prod["sonda_id"] == row["id"]]
-                m_sonda = (
-                    (prod_sonda["prof_final"] - prod_sonda["prof_inicial"]).sum()
-                    if not prod_sonda.empty
-                    else 0.0
-                )
+                m_sonda = (prod_sonda["prof_final"] - prod_sonda["prof_inicial"]).sum() if not prod_sonda.empty else 0.0
             else:
                 m_sonda = 0.0
 
@@ -793,22 +593,15 @@ elif opcao == "Cadastro de Sondas" and perfil_atual == "Admin":
 
             st.markdown("---")
             st.subheader("🗑️ Excluir Sonda")
-
-            opcoes_sonda = [
-                f"{row['id']} - {row['codigo']} ({row['equipe']})"
-                for _, row in df_sondas.iterrows()
-            ]
-            sonda_excluir_str = st.selectbox(
-                "Selecione a Sonda para excluir:", opcoes_sonda
-            )
+            
+            opcoes_sonda = [f"{row['id']} - {row['codigo']} ({row['equipe']})" for _, row in df_sondas.iterrows()]
+            sonda_excluir_str = st.selectbox("Selecione a Sonda para excluir:", opcoes_sonda)
             sonda_id_excluir = int(sonda_excluir_str.split(" - ")[0])
 
             if st.button("Excluir Sonda Selecionada", type="primary"):
                 conn = get_connection()
                 cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM sondas WHERE id = ?", (sonda_id_excluir,)
-                )
+                cursor.execute("DELETE FROM sondas WHERE id = ?", (sonda_id_excluir,))
                 conn.commit()
                 conn.close()
                 st.success("Sonda excluída com sucesso!")
@@ -817,28 +610,391 @@ elif opcao == "Cadastro de Sondas" and perfil_atual == "Admin":
             st.info("Nenhuma sonda cadastrada.")
 
     with tab_novo:
-        with st.form("form_sonda"):
+        with st.form("form_sonda", clear_on_submit=True):
             codigo = st.text_input("Código da Sonda (ex: SD-01)")
             equipe = st.text_input("Equipe Responsável")
-            projeto = st.text_input("Projeto / Mina")
-            status = st.selectbox("Status Inicial", ["Operando", "Parada", "Manutenção"])
-            
-            cadastrar = st.form_submit_button("Salvar Sonda", type="primary")
-
-            if cadastrar:
+            projeto = st.text_input("Projeto / Frente")
+            status = st.selectbox("Status", ["Operando", "Parada", "Manutenção"])
+            if st.form_submit_button("Cadastrar", type="primary"):
                 if codigo and equipe and projeto:
+                    conn = get_connection()
+                    cursor = conn.cursor()
                     try:
+                        cursor.execute("INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)", (codigo, equipe, projeto, status))
+                        conn.commit()
+                        st.success("Sonda cadastrada com sucesso!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Sonda já cadastrada.")
+                    finally:
+                        conn.close()
+
+# ------------------------------------------------------------------------------
+# 3. APONTAMENTO DIÁRIO
+# ------------------------------------------------------------------------------
+elif opcao == "Apontamento Diário":
+    st.title("Apontamento Diário de Produção")
+    st.markdown("---")
+
+    conn = get_connection()
+    if perfil_atual == "Admin":
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos", conn)
+        df_prod = pd.read_sql_query("SELECT p.id, p.data, s.codigo as sonda, p.furo_id, p.prof_inicial, p.prof_final, (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id ORDER BY p.data DESC", conn)
+    else:
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,))
+        df_furos = pd.read_sql_query("SELECT id, sonda_id FROM furos WHERE sonda_id = ?", conn, params=(sonda_id_atual,))
+        df_prod = pd.read_sql_query("SELECT p.id, p.data, s.codigo as sonda, p.furo_id, p.prof_inicial, p.prof_final, (p.prof_final - p.prof_inicial) as avanco, p.horas_trabalhadas, p.horas_paradas, p.motivo_parada FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id WHERE p.sonda_id = ? ORDER BY p.data DESC", conn, params=(sonda_id_atual,))
+    conn.close()
+
+    tab_hist, tab_novo = st.tabs(["Histórico", "Registrar Apontamento"])
+
+    with tab_hist:
+        if not df_prod.empty:
+            st.dataframe(df_prod, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Registro de Apontamento")
+            
+            opcoes_prod = [f"ID: {row['id']} | Data: {row['data']} | Furo: {row['furo_id']} | Avanço: {row['avanco']}m" for _, row in df_prod.iterrows()]
+            prod_excluir_str = st.selectbox("Selecione o Apontamento para excluir:", opcoes_prod)
+            prod_id_excluir = int(prod_excluir_str.split(" | ")[0].replace("ID: ", ""))
+
+            if st.button("Excluir Apontamento Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM producao_diaria WHERE id = ?", (prod_id_excluir,))
+                conn.commit()
+                conn.close()
+                st.success("Apontamento excluído com sucesso!")
+                st.rerun()
+        else:
+            st.info("Nenhum registro encontrado.")
+
+    with tab_novo:
+        if not df_sondas.empty and not df_furos.empty:
+            with st.form("form_prod", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                dt = c1.date_input("Data", date.today())
+                sonda_sel = c2.selectbox("Sonda", df_sondas["codigo"].tolist())
+                furo_sel = c3.selectbox("Furo", df_furos["id"].tolist())
+
+                c4, c5, c6 = st.columns(3)
+                p_ini = c4.number_input("Prof. Inicial (m)", min_value=0.0, step=0.1)
+                p_fin = c5.number_input("Prof. Final (m)", min_value=0.0, step=0.1)
+                h_trab = c6.number_input("Horas Trabalhadas", min_value=0.0, step=0.5)
+
+                c7, c8 = st.columns(2)
+                h_par = c7.number_input("Horas Paradas", min_value=0.0, step=0.5)
+                motivo = c8.text_input("Motivo Parada")
+
+                if st.form_submit_button("Salvar Apontamento", type="primary"):
+                    s_id = df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "INSERT INTO producao_diaria (data, sonda_id, furo_id, prof_inicial, prof_final, horas_trabalhadas, horas_paradas, motivo_parada) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (dt, int(s_id), furo_sel, p_ini, p_fin, h_trab, h_par, motivo)
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.success("Dados de produção salvos com sucesso!")
+                    st.rerun()
+        else:
+            st.warning("É necessário possuir furos e sondas vinculados para registrar o apontamento.")
+
+# ------------------------------------------------------------------------------
+# 4. CONTROLE DE FUROS (COM CAPTURA DE GPS AUTOMÁTICO)
+# ------------------------------------------------------------------------------
+elif opcao == "Controle de Furos":
+    st.title("Controle de Furos de Sondagem")
+    st.markdown("---")
+
+    conn = get_connection()
+    if perfil_atual == "Admin":
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+        df_furos = pd.read_sql_query("SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id", conn)
+    else:
+        df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas WHERE id = ?", conn, params=(sonda_id_atual,))
+        df_furos = pd.read_sql_query("SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id WHERE f.sonda_id = ?", conn, params=(sonda_id_atual,))
+    conn.close()
+
+    tab_furos_list, tab_furos_novo = st.tabs(["Furos Cadastrados", "Novo Furo"])
+
+    with tab_furos_list:
+        if not df_furos.empty:
+            st.dataframe(df_furos, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Furo")
+            
+            opcoes_furo = df_furos["id"].tolist()
+            furo_excluir = st.selectbox("Selecione o Furo para excluir:", opcoes_furo)
+
+            if st.button("Excluir Furo Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM furos WHERE id = ?", (furo_excluir,))
+                conn.commit()
+                conn.close()
+                st.success(f"Furo '{furo_excluir}' excluído com sucesso!")
+                st.rerun()
+        else:
+            st.info("Nenhum furo cadastrado.")
+
+    with tab_furos_novo:
+        if not df_sondas.empty:
+            st.subheader("Captura de Localização via GPS")
+            st.caption("Clique no botão abaixo para capturar as coordenadas exatas de onde você está no campo:")
+            
+            # Captura a localização atual via navegador/dispositivo
+            location = streamlit_geolocation()
+
+            lat_auto = location.get("latitude") if location else None
+            lon_auto = location.get("longitude") if location else None
+            alt_auto = location.get("altitude") if location else None
+
+            if lat_auto and lon_auto:
+                st.success(f"📍 Coordenadas capturadas: Lat {lat_auto:.6f}, Lon {lon_auto:.6f}")
+            else:
+                st.info("Clique no ícone de GPS acima para obter as coordenadas automaticamente ou preencha manualmente.")
+
+            with st.form("form_furo", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                furo_id = c1.text_input("Identificação do Furo (ex: F-01)")
+                sonda_sel = c2.selectbox("Sonda Responsável", df_sondas["codigo"].tolist())
+
+                c3, c4, c5 = st.columns(3)
+                coord_e = c3.number_input(
+                    "Longitude / Easting", 
+                    value=float(lon_auto) if lon_auto is not None else 0.0, 
+                    format="%.6f"
+                )
+                coord_n = c4.number_input(
+                    "Latitude / Northing", 
+                    value=float(lat_auto) if lat_auto is not None else 0.0, 
+                    format="%.6f"
+                )
+                cota = c5.number_input(
+                    "Cota / Altitude (Z)", 
+                    value=float(alt_auto) if alt_auto is not None else 0.0, 
+                    format="%.2f"
+                )
+
+                c6, c7 = st.columns(2)
+                prof_plan = c6.number_input("Prof. Planejada (m)", min_value=0.0, step=1.0)
+                situacao = c7.selectbox("Situação", ["Planejado", "Em Andamento", "Concluído", "Cancelado"])
+
+                if st.form_submit_button("Cadastrar Furo", type="primary"):
+                    s_id = df_sondas[df_sondas["codigo"] == sonda_sel]["id"].values[0]
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO furos (id, sonda_id, coord_e, coord_n, cota, prof_planejada, situacao) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (furo_id, int(s_id), coord_e, coord_n, cota, prof_plan, situacao)
+                        )
+                        conn.commit()
+                        st.success("Furo adicionado com sucesso!")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Identificação do Furo já existe.")
+                    finally:
+                        conn.close()
+
+# ------------------------------------------------------------------------------
+# 5. BOLETIM GEOLÓGICO
+# ------------------------------------------------------------------------------
+elif opcao == "Boletim Geológico":
+    st.title("Boletim Geológico de Campo")
+    st.markdown("---")
+
+    conn = get_connection()
+    if perfil_atual == "Admin":
+        df_furos = pd.read_sql_query("SELECT id FROM furos", conn)
+        df_geo = pd.read_sql_query("SELECT * FROM boletim_geologico ORDER BY furo_id, de_m ASC", conn)
+    else:
+        df_furos = pd.read_sql_query("SELECT id FROM furos WHERE sonda_id = ?", conn, params=(sonda_id_atual,))
+        df_geo = pd.read_sql_query("SELECT bg.* FROM boletim_geologico bg JOIN furos f ON bg.furo_id = f.id WHERE f.sonda_id = ? ORDER BY bg.furo_id, bg.de_m ASC", conn, params=(sonda_id_atual,))
+    conn.close()
+
+    tab_bg_hist, tab_bg_novo = st.tabs(["Registros Geológicos", "Registrar Intervalo"])
+
+    with tab_bg_hist:
+        if not df_geo.empty:
+            st.dataframe(df_geo, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Registro do Boletim")
+            
+            lista_ids = df_geo["id"].tolist()
+            id_para_excluir = st.selectbox("Selecione o ID do registro que deseja remover:", lista_ids)
+            
+            dados_registro = df_geo[df_geo["id"] == id_para_excluir].iloc[0]
+            st.caption(f"Furo: **{dados_registro['furo_id']}** | Trecho: **{dados_registro['de_m']}m - {dados_registro['ate_m']}m** | Litologia: **{dados_registro['litologia']}**")
+            
+            if st.button("Excluir Registro Selecionado", type="primary"):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM boletim_geologico WHERE id = ?", (int(id_para_excluir),))
+                conn.commit()
+                conn.close()
+
+                try:
+                    supabase = get_supabase_client()
+                    supabase.table("boletim_geologico").delete().eq("id", int(id_para_excluir)).execute()
+                except Exception as e:
+                    pass
+
+                st.success(f"Registro ID {id_para_excluir} excluído com sucesso!")
+                st.rerun()
+        else:
+            st.info("Nenhum boletim registrado.")
+
+    with tab_bg_novo:
+        if not df_furos.empty:
+            lista_furos = df_furos["id"].tolist()
+            
+            furo_sel = st.selectbox("Selecione o Furo para Registro", lista_furos)
+
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(ate_m) FROM boletim_geologico WHERE furo_id = ?", (furo_sel,))
+            ultimo_ate = cursor.fetchone()[0]
+            conn.close()
+
+            de_auto = float(ultimo_ate) if ultimo_ate is not None else 0.0
+
+            st.subheader("Intervalo e Métricas de Avanço")
+            col_de, col_ate, col_avanco = st.columns(3)
+            
+            de_m = col_de.number_input("De (m)", min_value=0.0, value=de_auto, step=0.1, key="de_m_input")
+            ate_m = col_ate.number_input("Até (m)", min_value=de_m, value=max(de_m, de_auto), step=0.1, key="ate_m_input")
+            
+            avanco_m = round(ate_m - de_m, 2)
+            col_avanco.metric("Avanço Automático (m)", f"{avanco_m:.2f} m")
+
+            with st.form("form_bg", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                rec_m = c1.number_input("Recuperação (m)", min_value=0.0, max_value=float(avanco_m) if avanco_m > 0 else 999.0, step=0.01)
+                
+                rec_pct = (rec_m / avanco_m * 100) if avanco_m > 0 else 0.0
+                c2.text_input("Recuperação (%)", value=f"{rec_pct:.1f}%", disabled=True)
+                
+                rqd_m = c3.number_input("RQD (m)", min_value=0.0, max_value=float(avanco_m) if avanco_m > 0 else 999.0, step=0.01)
+
+                c4, c5 = st.columns(2)
+                litologia = c4.text_input("Litologia")
+                n_amostra = c5.text_input("Nº Amostra")
+
+                foto = st.file_uploader("Foto da Caixa de Testemunho", type=["jpg", "png", "jpeg"])
+                desc = st.text_area("Descrição Geológica")
+                obs = st.text_area("Observações")
+
+                if st.form_submit_button("Salvar Boletim", type="primary"):
+                    if ate_m <= de_m and avanco_m == 0:
+                        st.error("A profundidade final 'Até (m)' deve ser maior que a profundidade inicial 'De (m)'.")
+                    else:
+                        foto_url = upload_foto_supabase(foto, foto.name) if foto else ""
                         conn = get_connection()
                         cursor = conn.cursor()
                         cursor.execute(
-                            "INSERT INTO sondas (codigo, equipe, projeto, status) VALUES (?, ?, ?, ?)",
-                            (codigo, equipe, projeto, status),
+                            """
+                            INSERT INTO boletim_geologico 
+                            (furo_id, de_m, ate_m, recuperacao_m, rqd_m, litologia, descricao_geologica, n_amostra, observacoes, foto_url)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (furo_sel, de_m, ate_m, rec_m, rqd_m, litologia, desc, n_amostra, obs, foto_url)
                         )
                         conn.commit()
                         conn.close()
-                        st.success(f"Sonda {codigo} cadastrada com sucesso!")
+
+                        salvar_boletim_supabase({
+                            "furo_id": furo_sel,
+                            "de_m": de_m,
+                            "ate_m": ate_m,
+                            "recuperacao_m": rec_m,
+                            "rqd_m": rqd_m,
+                            "litologia": litologia,
+                            "descricao_geologica": desc,
+                            "n_amostra": n_amostra,
+                            "observacoes": obs,
+                            "foto_url": foto_url
+                        })
+
+                        st.success("Boletim Geológico salvo com sucesso!")
+                        st.rerun()
+        else:
+            st.warning("Nenhum furo cadastrado para registrar boletim.")
+
+# ------------------------------------------------------------------------------
+# 6. GESTÃO DE USUÁRIOS (EXCLUSIVO ADMIN)
+# ------------------------------------------------------------------------------
+elif opcao == "Gestão de Usuários" and perfil_atual == "Admin":
+    st.title("Vinculação de Usuários e Sondas")
+    st.markdown("---")
+
+    conn = get_connection()
+    df_sondas = pd.read_sql_query("SELECT id, codigo FROM sondas", conn)
+    df_users = pd.read_sql_query("SELECT u.id, u.usuario, u.perfil, s.codigo as sonda_vinculada FROM usuarios u LEFT JOIN sondas s ON u.sonda_id = s.id", conn)
+    conn.close()
+
+    tab_u_lista, tab_u_novo = st.tabs(["Usuários Cadastrados", "Novo Usuário"])
+
+    with tab_u_lista:
+        if not df_users.empty:
+            st.dataframe(df_users, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.subheader("🗑️ Excluir Usuário")
+            
+            # Não permite excluir o usuário admin principal para evitar bloqueio
+            users_filtrados = df_users[df_users["usuario"] != "admin"]
+            
+            if not users_filtrados.empty:
+                opcoes_user = [f"ID: {row['id']} - {row['usuario']} ({row['perfil']})" for _, row in users_filtrados.iterrows()]
+                user_excluir_str = st.selectbox("Selecione o Usuário para excluir:", opcoes_user)
+                user_id_excluir = int(user_excluir_str.split(" - ")[0].replace("ID: ", ""))
+
+                if st.button("Excluir Usuário Selecionado", type="primary"):
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM usuarios WHERE id = ?", (user_id_excluir,))
+                    conn.commit()
+                    conn.close()
+                    st.success("Usuário excluído com sucesso!")
+                    st.rerun()
+            else:
+                st.caption("Apenas o usuário 'admin' principal está cadastrado (protegido contra exclusão).")
+        else:
+            st.info("Nenhum usuário cadastrado.")
+
+    with tab_u_novo:
+        with st.form("form_user", clear_on_submit=True):
+            new_user = st.text_input("Nome do Usuário")
+            new_pass = st.text_input("Senha", type="password")
+            new_perfil = st.selectbox("Perfil", ["Geólogo", "Operador", "Admin"])
+            
+            sonda_opcoes = ["Nenhuma / Admin"] + (df_sondas["codigo"].tolist() if not df_sondas.empty else [])
+            new_sonda = st.selectbox("Sonda Vinculada", sonda_opcoes)
+
+            if st.form_submit_button("Cadastrar Usuário", type="primary"):
+                if new_user and new_pass:
+                    s_id = None
+                    if new_sonda != "Nenhuma / Admin" and not df_sondas.empty:
+                        s_id = int(df_sondas[df_sondas["codigo"] == new_sonda]["id"].values[0])
+
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute(
+                            "INSERT INTO usuarios (usuario, senha, perfil, sonda_id) VALUES (?, ?, ?, ?)",
+                            (new_user, hash_senha(new_pass), new_perfil, s_id)
+                        )
+                        conn.commit()
+                        st.success("Usuário cadastrado com sucesso!")
                         st.rerun()
                     except sqlite3.IntegrityError:
-                        st.error("Erro: Código de sonda já cadastrado.")
-                else:
-                    st.warning("Por favor, preencha todos os campos obrigatórios.")
+                        st.error("Usuário já existe.")
+                    finally:
+                        conn.close()
