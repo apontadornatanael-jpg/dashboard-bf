@@ -247,34 +247,39 @@ def botao_logout():
 
 
 # ==============================================================================
-# HELPER DE EXPORTAÇÃO EXCEL
+# HELPER DE EXPORTAÇÃO EXCEL COMPLETO E ESTILIZADO
 # ==============================================================================
-
 
 def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
 
-    cor_cabecalho = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    cor_titulo = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")
-    cor_card = PatternFill(start_color="F2F4F7", end_color="F2F4F7", fill_type="solid")
-    cor_zebra = PatternFill(start_color="F9FAFB", end_color="F9FAFB", fill_type="solid")
+    # Palette de Cores Elegante e Profissional (Azul Corporativo / Muted Tones)
+    cor_titulo = PatternFill(start_color="1B365D", end_color="1B365D", fill_type="solid")     # Azul Marinho Escuro
+    cor_cabecalho = PatternFill(start_color="2C5282", end_color="2C5282", fill_type="solid")  # Azul Profundo
+    cor_card = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")        # Off-white / Card KPI
+    cor_zebra = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")       # Cinza suave alternado
 
     fonte_titulo = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
     fonte_cabecalho = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-    fonte_card_num = Font(name="Calibri", size=14, bold=True, color="1F4E79")
-    fonte_card_lbl = Font(name="Calibri", size=9, italic=True, color="595959")
-    fonte_dados = Font(name="Calibri", size=10)
+    fonte_card_num = Font(name="Calibri", size=16, bold=True, color="1B365D")
+    fonte_card_lbl = Font(name="Calibri", size=9, bold=True, color="64748B")
+    fonte_dados = Font(name="Calibri", size=10, color="0F172A")
 
-    borda_fina = Side(border_style="thin", color="D9D9D9")
+    borda_fina = Side(border_style="thin", color="CBD5E1")
     borda_caixa = Border(left=borda_fina, right=borda_fina, top=borda_fina, bottom=borda_fina)
 
     conn = get_connection()
 
+    # Consulta dos Dados filtrados por perfil de acesso
     if perfil_usuario == "Admin":
         df_sondas = pd.read_sql_query("SELECT * FROM sondas", conn)
         df_prod = pd.read_sql_query(
             "SELECT p.*, s.codigo as sonda_codigo FROM producao_diaria p LEFT JOIN sondas s ON p.sonda_id = s.id",
+            conn,
+        )
+        df_furos = pd.read_sql_query(
+            "SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id",
             conn,
         )
         df_geo = pd.read_sql_query(
@@ -293,6 +298,11 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
             conn,
             params=(user_sonda_id,),
         )
+        df_furos = pd.read_sql_query(
+            "SELECT f.*, s.codigo as sonda_codigo FROM furos f LEFT JOIN sondas s ON f.sonda_id = s.id WHERE f.sonda_id = ?",
+            conn,
+            params=(user_sonda_id,),
+        )
         df_geo = pd.read_sql_query(
             """
             SELECT bg.id, bg.furo_id, bg.de_m, bg.ate_m, (bg.ate_m - bg.de_m) as avanco_m, bg.recuperacao_m, 
@@ -305,9 +315,14 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
         )
     conn.close()
 
+    # -------------------------------------------------------------------------
+    # ABA 1: DASHBOARD EXECUTIVO
+    # -------------------------------------------------------------------------
     ws_dash = wb.active
     ws_dash.title = "Dashboard Executivo"
     ws_dash.views.sheetView[0].showGridLines = True
+
+    # Banner de Cabeçalho
     ws_dash.merge_cells("A1:H1")
     ws_dash["A1"] = "DASHBOARD EXECUTIVO — CONTROLE INTEGRADO DE SONDAGEM"
     ws_dash["A1"].font = fonte_titulo
@@ -315,37 +330,224 @@ def gerar_dashboard_excel_completo(perfil_usuario, user_sonda_id):
     ws_dash["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws_dash.row_dimensions[1].height = 40
 
+    # Indicadores KPIs principais
     total_sondas = len(df_sondas)
-    sondas_op = len(df_sondas[df_sondas["status"] == "Operando"])
+    sondas_op = len(df_sondas[df_sondas["status"] == "Operando"]) if not df_sondas.empty else 0
     total_metros = (df_prod["prof_final"] - df_prod["prof_inicial"]).sum() if not df_prod.empty else 0.0
     total_hrs_trab = df_prod["horas_trabalhadas"].sum() if not df_prod.empty else 0.0
     total_hrs_par = df_prod["horas_paradas"].sum() if not df_prod.empty else 0.0
     eficiencia = ((total_hrs_trab / (total_hrs_trab + total_hrs_par) * 100) if (total_hrs_trab + total_hrs_par) > 0 else 0.0)
 
     kpis = [
-        ("Sondas Operando", f"{sondas_op}/{total_sondas}", "A3:B3", "A4:B4", "A3:B4"),
-        ("Metragem Total", f"{total_metros:.1f} m", "D3:E3", "D4:E4", "D3:E4"),
-        ("Eficiência Geral", f"{eficiencia:.1f}%", "G3:H3", "G4:H4", "G3:H4"),
+        ("SONDAS OPERANDO", f"{sondas_op} / {total_sondas}", "A3:B3", "A4:B4", "A3:B4"),
+        ("METRAGEM TOTAL PERFURADA", f"{total_metros:.1f} m", "C3:D3", "C4:D4", "C3:D4"),
+        ("HORAS TRABALHADAS", f"{total_hrs_trab:.1f} h", "E3:F3", "E4:F4", "E3:F4"),
+        ("EFICIÊNCIA OPERACIONAL", f"{eficiencia:.1f}%", "G3:H3", "G4:H4", "G3:H4"),
     ]
 
     for lbl, val, r_lbl, r_val, r_box in kpis:
         ws_dash.merge_cells(r_lbl)
         ws_dash[r_lbl.split(":")[0]] = lbl
         ws_dash[r_lbl.split(":")[0]].font = fonte_card_lbl
-        ws_dash[r_lbl.split(":")[0]].alignment = Alignment(horizontal="center")
+        ws_dash[r_lbl.split(":")[0]].alignment = Alignment(horizontal="center", vertical="center")
+
         ws_dash.merge_cells(r_val)
         ws_dash[r_val.split(":")[0]] = val
         ws_dash[r_val.split(":")[0]].font = fonte_card_num
-        ws_dash[r_val.split(":")[0]].alignment = Alignment(horizontal="center")
+        ws_dash[r_val.split(":")[0]].alignment = Alignment(horizontal="center", vertical="center")
+
         for row in ws_dash[r_box]:
             for cell in row:
                 cell.fill = cor_card
                 cell.border = borda_caixa
+    
+    ws_dash.row_dimensions[3].height = 18
+    ws_dash.row_dimensions[4].height = 28
+
+    # Tabela Resumo Operacional
+    ws_dash.cell(row=6, column=1, value="RESUMO OPERACIONAL DAS SONDAS").font = Font(name="Calibri", size=12, bold=True, color="1B365D")
+    headers_resumo = ["ID", "Código Sonda", "Equipe Responsável", "Projeto / Frente", "Status Operacional", "Metros Perfurados (m)"]
+    for col_idx, h in enumerate(headers_resumo, start=1):
+        cell = ws_dash.cell(row=7, column=col_idx, value=h)
+        cell.font = fonte_cabecalho
+        cell.fill = cor_cabecalho
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = borda_caixa
+    ws_dash.row_dimensions[7].height = 24
+
+    row_idx = 8
+    if not df_sondas.empty:
+        for _, s_row in df_sondas.iterrows():
+            m_sonda = (df_prod[df_prod["sonda_id"] == s_row["id"]]["prof_final"] - df_prod[df_prod["sonda_id"] == s_row["id"]]["prof_inicial"]).sum() if not df_prod.empty else 0.0
+            vals = [s_row["id"], s_row["codigo"], s_row["equipe"], s_row["projeto"], s_row["status"], m_sonda]
+            for col_idx, val in enumerate(vals, start=1):
+                cell = ws_dash.cell(row=row_idx, column=col_idx, value=val)
+                cell.font = fonte_dados
+                cell.border = borda_caixa
+                if col_idx in [1, 2, 5]:
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                elif col_idx == 6:
+                    cell.alignment = Alignment(horizontal="right", vertical="center")
+                    cell.number_format = "#,##0.0"
+                else:
+                    cell.alignment = Alignment(horizontal="left", vertical="center")
+                if row_idx % 2 == 0:
+                    cell.fill = cor_zebra
+            row_idx += 1
+
+    for col in range(1, 9):
+        col_letter = get_column_letter(col)
+        ws_dash.column_dimensions[col_letter].width = 22
+
+    # -------------------------------------------------------------------------
+    # HELPER PARA CONSTRUÇÃO DE ABAS FORMATADAS
+    # -------------------------------------------------------------------------
+    def adicionar_aba_tabela(titulo_aba, titulo_cabecalho, df_data, colunas_map, formatos_map=None):
+        ws = wb.create_sheet(title=titulo_aba)
+        ws.views.sheetView[0].showGridLines = True
+
+        num_cols = len(colunas_map)
+        col_fim = get_column_letter(num_cols)
+        ws.merge_cells(f"A1:{col_fim}1")
+        ws["A1"] = titulo_cabecalho
+        ws["A1"].font = fonte_titulo
+        ws["A1"].fill = cor_titulo
+        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 35
+
+        headers = list(colunas_map.values())
+        for c_idx, h_text in enumerate(headers, start=1):
+            cell = ws.cell(row=3, column=c_idx, value=h_text)
+            cell.font = fonte_cabecalho
+            cell.fill = cor_cabecalho
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = borda_caixa
+        ws.row_dimensions[3].height = 26
+
+        r_idx = 4
+        if not df_data.empty:
+            cols_df = list(colunas_map.keys())
+            for _, r_data in df_data.iterrows():
+                for c_idx, col_name in enumerate(cols_df, start=1):
+                    val = r_data[col_name] if col_name in r_data else ""
+                    cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                    cell.font = fonte_dados
+                    cell.border = borda_caixa
+
+                    fmt = formatos_map.get(col_name, "text") if formatos_map else "text"
+                    if fmt == "number":
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                        cell.number_format = "#,##0.00"
+                    elif fmt == "int":
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                        cell.number_format = "#,##0"
+                    elif fmt == "pct":
+                        cell.alignment = Alignment(horizontal="right", vertical="center")
+                        cell.number_format = "0.0\"%\""
+                    elif fmt == "center":
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    else:
+                        cell.alignment = Alignment(horizontal="left", vertical="center")
+
+                    if r_idx % 2 == 0:
+                        cell.fill = cor_zebra
+
+                ws.row_dimensions[r_idx].height = 20
+                r_idx += 1
+
+        for c_idx in range(1, num_cols + 1):
+            c_letter = get_column_letter(c_idx)
+            max_len = max(
+                len(str(ws.cell(row=r, column=c_idx).value or '')) for r in range(3, max(r_idx, 4))
+            )
+            ws.column_dimensions[c_letter].width = max(max_len + 4, 12)
+
+    # -------------------------------------------------------------------------
+    # ABA 2: CADASTRO DE SONDAS
+    # -------------------------------------------------------------------------
+    cols_sondas = {
+        "id": "ID",
+        "codigo": "Código da Sonda",
+        "equipe": "Equipe Responsável",
+        "projeto": "Projeto / Frente",
+        "status": "Status Operacional"
+    }
+    fmts_sondas = {"id": "int", "codigo": "center", "status": "center"}
+    adicionar_aba_tabela("Sondas", "CADASTRO E STATUS DAS SONDAS", df_sondas, cols_sondas, fmts_sondas)
+
+    # -------------------------------------------------------------------------
+    # ABA 3: APONTAMENTO DIÁRIO DE PRODUÇÃO
+    # -------------------------------------------------------------------------
+    if not df_prod.empty and "avanco" not in df_prod.columns:
+        df_prod["avanco"] = df_prod["prof_final"] - df_prod["prof_inicial"]
+
+    cols_prod = {
+        "id": "ID Registro",
+        "data": "Data",
+        "sonda_codigo": "Sonda",
+        "furo_id": "Furo",
+        "prof_inicial": "Prof. Inicial (m)",
+        "prof_final": "Prof. Final (m)",
+        "avanco": "Avanço (m)",
+        "horas_trabalhadas": "Horas Trab. (h)",
+        "horas_paradas": "Horas Paradas (h)",
+        "motivo_parada": "Motivo da Parada"
+    }
+    fmts_prod = {
+        "id": "int", "data": "center", "sonda_codigo": "center", "furo_id": "center",
+        "prof_inicial": "number", "prof_final": "number", "avanco": "number",
+        "horas_trabalhadas": "number", "horas_paradas": "number"
+    }
+    adicionar_aba_tabela("Apontamento Diário", "HISTÓRICO DE APONTAMENTO DIÁRIO DE PRODUÇÃO", df_prod, cols_prod, fmts_prod)
+
+    # -------------------------------------------------------------------------
+    # ABA 4: CONTROLE DE FUROS
+    # -------------------------------------------------------------------------
+    cols_furos = {
+        "id": "Identificação Furo",
+        "sonda_codigo": "Sonda Responsável",
+        "coord_e": "Longitude / Easting",
+        "coord_n": "Latitude / Northing",
+        "cota": "Cota (m)",
+        "prof_planejada": "Prof. Planejada (m)",
+        "prof_executada": "Prof. Executada (m)",
+        "situacao": "Situação"
+    }
+    fmts_furos = {
+        "id": "center", "sonda_codigo": "center", "coord_e": "number", "coord_n": "number",
+        "cota": "number", "prof_planejada": "number", "prof_executada": "number", "situacao": "center"
+    }
+    adicionar_aba_tabela("Controle de Furos", "CONTROLE E STATUS DOS FUROS DE SONDAGEM", df_furos, cols_furos, fmts_furos)
+
+    # -------------------------------------------------------------------------
+    # ABA 5: BOLETIM GEOLÓGICO
+    # -------------------------------------------------------------------------
+    cols_geo = {
+        "id": "ID",
+        "furo_id": "Identificação Furo",
+        "de_m": "De (m)",
+        "ate_m": "Até (m)",
+        "avanco_m": "Avanço (m)",
+        "recuperacao_m": "Recuperação (m)",
+        "recuperacao_pct": "Recuperação (%)",
+        "rqd_m": "RQD (m)",
+        "rqd_pct": "RQD (%)",
+        "litologia": "Litologia",
+        "n_amostra": "Nº Amostra",
+        "descricao_geologica": "Descrição Geológica",
+        "observacoes": "Observações",
+        "foto_url": "Link da Foto"
+    }
+    fmts_geo = {
+        "id": "int", "furo_id": "center", "de_m": "number", "ate_m": "number", "avanco_m": "number",
+        "recuperacao_m": "number", "recuperacao_pct": "pct", "rqd_m": "number", "rqd_pct": "pct",
+        "n_amostra": "center"
+    }
+    adicionar_aba_tabela("Boletim Geológico", "BOLETIM DE DESCRIÇÃO GEOLÓGICA E GEOTÉCNICA", df_geo, cols_geo, fmts_geo)
 
     wb.save(output)
     output.seek(0)
     return output
-
 
 # ==============================================================================
 # INICIALIZAÇÃO DA INTERFACE
